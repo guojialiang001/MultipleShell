@@ -1,6 +1,7 @@
 node_modules/
 release/
 dist/
+ai/
 dist-electron/
 *.log
 npm-debug.log*
