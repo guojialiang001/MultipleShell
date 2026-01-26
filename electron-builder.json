@@ -1,0 +1,21 @@
+{
+  "appId": "com.multipleshell.app",
+  "productName": "MultipleShell",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "dist/**/*",
+    "src/main/**/*",
+    "configs/**/*",
+    "build/**/*"
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "MIGRATION-CHECK",
+  "env": {
+    "MIGRATION_MARK": "1"
+  }
+}
