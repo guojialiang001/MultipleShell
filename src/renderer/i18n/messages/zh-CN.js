@@ -5,7 +5,7 @@ export default {
   },
   menu: {
     settings: '设置',
-    manageTemplates: '管理模板',
+    manageTemplates: '管理配置',
     language: '语言'
   },
   language: {
@@ -46,24 +46,24 @@ export default {
     cwd: '当前目录'
   },
   configSelector: {
-    titleSelectTemplate: '选择模板',
-    titleManageTemplates: '管理模板',
+    titleSelectTemplate: '选择配置',
+    titleManageTemplates: '管理配置',
     titleEditTabConfig: '编辑标签配置',
-    manage: '管理',
+    manage: '管理配置',
     back: '返回',
     close: '关闭',
-    availableTemplates: '可用模板',
+    availableTemplates: '可用配置',
     workingDirectory: '工作目录',
     defaultCwd: '默认：{default}',
     userProfile: '用户目录',
     browse: '浏览...',
-    createNewTemplate: '新建模板',
+    createNewTemplate: '新建配置',
     editCurrentTab: '编辑当前标签',
     createTerminal: '创建终端',
     edit: '编辑',
     delete: '删除',
     custom: '自定义',
-    confirmDeleteTemplate: '删除模板“{name}”？'
+    confirmDeleteTemplate: '删除配置“{name}”？'
   },
   configEditor: {
     titleEdit: '编辑配置',

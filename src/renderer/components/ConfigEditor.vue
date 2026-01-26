@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, onBeforeUnmount, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps({
@@ -30,18 +30,49 @@ const opencodeConfigDirty = ref(false)
 
 const codexConfigTomlText = ref('')
 const codexAuthJsonText = ref('')
-const codexActive = ref('config') // config | auth
+const codexActive = ref('config')
 const codexPanelOpen = ref(false)
 
-const autosaveState = ref('idle') // idle | saving | saved | error
+const autosaveState = ref('idle')
 let autosaveTimer = null
 const lastLoadedConfigUpdatedAt = ref(null)
+
+const isDropdownOpen = ref(false)
+const dropdownRef = ref(null)
 
 const TYPE_OPTIONS = computed(() => [
   { value: 'claude-code', label: t('configEditor.types.claudeCode') },
   { value: 'codex', label: t('configEditor.types.codex') },
   { value: 'opencode', label: t('configEditor.types.opencode') }
 ])
+
+const selectedTypeLabel = computed(() => {
+  const opt = TYPE_OPTIONS.value.find(o => o.value === form.value.type)
+  return opt ? opt.label : t('configEditor.selectType')
+})
+
+const toggleDropdown = () => {
+  isDropdownOpen.value = !isDropdownOpen.value
+}
+
+const selectType = (value) => {
+  form.value.type = value
+  isDropdownOpen.value = false
+}
+
+const closeDropdown = (e) => {
+  if (dropdownRef.value && !dropdownRef.value.contains(e.target)) {
+    isDropdownOpen.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', closeDropdown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeDropdown)
+})
 
 const isCodex = computed(() => form.value.type === 'codex')
 const isClaudeCode = computed(() => form.value.type === 'claude-code')
@@ -434,16 +465,29 @@ const save = () => {
       <div class="left-pane">
           <div class="form-group">
           <label>{{ t('configEditor.type') }}</label>
-          <div class="select-wrapper">
-              <select v-model="form.type" class="select">
-                  <option value="" disabled>{{ t('configEditor.selectType') }}</option>
-                  <option v-for="opt in TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-              </select>
-              <div class="select-arrow">
-                  <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <div class="custom-select" ref="dropdownRef">
+            <div class="select-trigger" @click="toggleDropdown" :class="{ active: isDropdownOpen }">
+              <span class="select-value" :class="{ placeholder: !form.type }">{{ selectedTypeLabel }}</span>
+              <svg class="select-arrow" :class="{ open: isDropdownOpen }" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <Transition name="dropdown">
+              <div v-if="isDropdownOpen" class="dropdown-menu">
+                <div 
+                  class="dropdown-item" 
+                  v-for="opt in TYPE_OPTIONS" 
+                  :key="opt.value"
+                  :class="{ selected: form.type === opt.value }"
+                  @click="selectType(opt.value)"
+                >
+                  <span class="item-label">{{ opt.label }}</span>
+                  <svg v-if="form.type === opt.value" class="check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                    <polyline points="20 6 9 17 4 12"></polyline>
                   </svg>
+                </div>
               </div>
+            </Transition>
           </div>
           </div>
 
@@ -698,7 +742,7 @@ h3 {
 .codex-panel-btn {
   width: 32px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.10);
   background: rgba(255, 255, 255, 0.04);
   color: rgba(255, 255, 255, 0.85);
@@ -746,6 +790,109 @@ label {
   font-weight: 500;
 }
 
+.custom-select {
+  position: relative;
+  width: 100%;
+  z-index: 100;
+}
+
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.select-trigger:hover {
+  border-color: #4a9eff;
+  background: #222222;
+}
+
+.select-trigger.active {
+  border-color: #3b82f6;
+  background: #1a1a1a;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.select-value {
+  color: #f5f5f5;
+  font-size: 13px;
+}
+
+.select-value.placeholder {
+  color: #666666;
+}
+
+.select-arrow {
+  color: #888888;
+  transition: transform 0.2s ease;
+}
+
+.select-arrow.open {
+  transform: rotate(180deg);
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background: #1e1e1e;
+  border: 1px solid #333333;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  z-index: 100;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: #a3a3a3;
+  font-size: 13px;
+}
+
+.dropdown-item:hover {
+  background: #2a2a2a;
+  color: #ffffff;
+}
+
+.dropdown-item.selected {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  font-weight: 500;
+}
+
+.item-label {
+  flex: 1;
+}
+
+.check-icon {
+  color: #60a5fa;
+}
+
+.dropdown-enter-active,
+.dropdown-leave-active {
+  transition: all 0.2s ease;
+}
+
+.dropdown-enter-from,
+.dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
 input,
 textarea,
 .select {
@@ -776,6 +923,18 @@ textarea:focus,
     cursor: pointer;
 }
 
+.select option {
+  background: var(--bg-color);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.select option:disabled {
+  color: var(--text-secondary);
+}
+
 .select-arrow {
     position: absolute;
     right: 12px;
@@ -800,52 +959,53 @@ textarea:focus,
 
 .error {
   margin-top: 8px;
-  color: var(--danger-color);
+  color: #f87171;
   font-size: 12px;
   display: flex;
   align-items: center;
   gap: 6px;
-  background: rgba(239, 68, 68, 0.1);
-  padding: 8px;
-  border-radius: var(--radius-sm);
 }
 
 .footer-actions {
     padding: 16px 20px;
-    background: var(--surface-hover);
-    border-top: 1px solid var(--border-color);
+    background: transparent;
+    border-top: 1px solid var(--border-subtle);
     display: flex;
     justify-content: flex-end;
     gap: 12px;
 }
 
 .btn-primary {
-  background: var(--primary-color);
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   color: white;
   border: none;
-  border-radius: var(--radius-md);
-  padding: 8px 16px;
+  border-radius: 8px;
+  padding: 10px 20px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
 }
 
 .btn-primary:hover {
-  background: var(--primary-hover);
+  background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(37, 99, 235, 0.4);
 }
 
 .btn-secondary {
   background: transparent;
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 8px 16px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 10px 20px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .btn-secondary:hover {
-  background: var(--surface-hover);
-  border-color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--border-accent);
 }
 </style>

@@ -137,6 +137,10 @@ const closePromptMessage = computed(() => {
 const isCloseInputValid = computed(() => closePromptInput.value.trim().toLowerCase() === 'close')
 
 const openClosePrompt = (tab) => {
+  if (tab?.pending) {
+    emit('close', tab.id)
+    return
+  }
   closePromptTab.value = tab
   closePromptInput.value = ''
   showClosePrompt.value = true
@@ -388,7 +392,7 @@ watch(
   background: transparent;
   border: 1px solid transparent;
   border-bottom: none;
-  border-radius: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   cursor: pointer;
   color: var(--text-secondary);
   font-size: 13px;
@@ -432,15 +436,15 @@ watch(
   top: 0;
   left: 0;
   width: 100%;
-  height: 2px;
-  background: var(--primary-color);
-  border-radius: 2px 2px 0 0;
+  height: 1px;
+  background: rgba(147, 197, 253, 0.9);
+  border-radius: var(--radius-sm);
 }
 
 .tab-icon {
   width: 18px;
   height: 18px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -482,7 +486,7 @@ watch(
 .tab-icon.tool-opencode .tab-icon-img {
   width: 18px;
   height: 18px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .tab-title {
@@ -501,7 +505,7 @@ watch(
   width: 26px;
   height: 28px;
   padding: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -615,7 +619,7 @@ watch(
   color: var(--text-secondary);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;

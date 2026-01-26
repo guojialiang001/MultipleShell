@@ -16,9 +16,14 @@ class PTYManager {
   normalizeEnvObject(obj) {
     const out = {}
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out
+    const ALLOWED_ENV_VAR_PATTERN = /^[A-Z_][A-Z0-9_]*$/i
     for (const [k, v] of Object.entries(obj)) {
       const key = String(k).trim()
       if (!key) continue
+      if (!ALLOWED_ENV_VAR_PATTERN.test(key)) {
+        console.warn(`[PTYManager] Skipping invalid env var name: ${key}`)
+        continue
+      }
       out[key] = v == null ? '' : String(v)
     }
     return out
@@ -95,9 +100,26 @@ class PTYManager {
     this.codexTempHomes.delete(sessionId)
     if (process.env.MPS_KEEP_CODEX_HOME === '1') return
     try {
-      fs.rmSync(home, { recursive: true, force: true })
-    } catch (_) {
-      // ignore
+      if (fs.existsSync(home)) {
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    } catch (err) {
+      console.error(`[PTYManager] Failed to cleanup ${home}:`, err)
+    }
+  }
+
+  cleanupOrphanedTempDirs() {
+    const tmpDir = os.tmpdir()
+    try {
+      const entries = fs.readdirSync(tmpDir)
+      for (const entry of entries) {
+        if (entry.startsWith('mps-codex-home-')) {
+          const fullPath = path.join(tmpDir, entry)
+          fs.rmSync(fullPath, { recursive: true, force: true })
+        }
+      }
+    } catch (err) {
+      console.warn('[PTYManager] Failed to cleanup orphaned temp dirs:', err)
     }
   }
 

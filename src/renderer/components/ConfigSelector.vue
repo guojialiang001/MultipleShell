@@ -17,6 +17,8 @@ const customWorkingDir = ref('')
 const showEditor = ref(false)
 const editingConfig = ref(null)
 const isSelectingFolder = ref(false)
+const showDeleteConfirm = ref(false)
+const deleteCandidate = ref(null)
 
 watch(
   () => props.mode,
@@ -25,6 +27,8 @@ watch(
     editingConfig.value = null
     selectedConfig.value = null
     customWorkingDir.value = ''
+    showDeleteConfirm.value = false
+    deleteCandidate.value = null
   }
 )
 
@@ -84,9 +88,20 @@ const editTemplate = (template) => {
   showEditor.value = true
 }
 
-const deleteTemplate = async (template) => {
-  if (!confirm(t('configSelector.confirmDeleteTemplate', { name: template.name }))) return
-  await emit('deleteTemplate', template.id)
+const deleteTemplate = (template) => {
+  deleteCandidate.value = template
+  showDeleteConfirm.value = true
+}
+
+const cancelDeleteTemplate = () => {
+  showDeleteConfirm.value = false
+  deleteCandidate.value = null
+}
+
+const confirmDeleteTemplate = async () => {
+  if (!deleteCandidate.value) return
+  await emit('deleteTemplate', deleteCandidate.value.id)
+  cancelDeleteTemplate()
 }
 
 const close = () => emit('close')
@@ -164,6 +179,25 @@ const headerTitle = computed(() => {
       <button v-if="mode === 'edit'" @click="showEditor = true" class="btn-primary full-width">{{ t('configSelector.editCurrentTab') }}</button>
       <button v-if="mode === 'create'" @click="createTerminal" :disabled="!selectedConfig" class="btn-primary full-width">{{ t('configSelector.createTerminal') }}</button>
     </div>
+
+    <Transition name="fade">
+      <div v-if="showDeleteConfirm" class="confirm-overlay" @click.self="cancelDeleteTemplate">
+        <div class="confirm-modal" @click.stop>
+          <div class="confirm-title">{{ t('configSelector.delete') }}</div>
+          <div class="confirm-message">
+            {{ t('configSelector.confirmDeleteTemplate', { name: deleteCandidate?.name || '' }) }}
+          </div>
+          <div class="confirm-actions">
+            <button class="btn-secondary" type="button" @click="cancelDeleteTemplate">
+              {{ t('common.cancel') }}
+            </button>
+            <button class="btn-danger" type="button" @click="confirmDeleteTemplate">
+              {{ t('configSelector.delete') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 
   <ConfigEditor v-else :config="editingConfig" @save="saveConfig" @cancel="showEditor = false" />
@@ -171,6 +205,7 @@ const headerTitle = computed(() => {
 
 <style scoped>
 .config-selector {
+  position: relative;
   background: var(--surface-color);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
@@ -251,7 +286,7 @@ h3 {
 .config-icon {
     width: 32px;
     height: 32px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--surface-active);
     color: var(--text-primary);
     display: flex;
@@ -292,11 +327,16 @@ h3 {
     border: none;
     color: var(--text-secondary);
     cursor: pointer;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s;
+}
+
+.btn-icon {
+    width: 32px;
+    height: 32px;
 }
 
 .btn-icon:hover {
@@ -413,5 +453,60 @@ input:focus {
 
 .full-width {
     width: 100%;
+}
+
+.confirm-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+
+.confirm-modal {
+  width: min(420px, 90%);
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.confirm-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.confirm-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fecaca;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+  font-size: 13px;
+}
+
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
 }
 </style>

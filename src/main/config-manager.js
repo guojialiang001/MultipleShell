@@ -63,6 +63,33 @@ class ConfigManager {
     )
   }
 
+  setSecurePermissions(targetPath, isDirectory = false) {
+    try {
+      const mode = isDirectory ? 0o700 : 0o600
+      fs.chmodSync(targetPath, mode)
+    } catch (_) {
+      // chmod may not work properly on Windows; ignore errors
+    }
+  }
+
+  ensureSecureRootDirectories() {
+    const roots = [
+      this.getClaudeHomesRoot(),
+      this.getCodexHomesRoot(),
+      this.getOpenCodeHomesRoot(),
+      app.getPath('userData')
+    ]
+    for (const root of roots) {
+      try {
+        if (fs.existsSync(root)) {
+          this.setSecurePermissions(root, true)
+        }
+      } catch (_) {
+        // ignore
+      }
+    }
+  }
+
   writeClaudeHomeFiles(config) {
     const type = typeof config?.type === 'string' ? config.type : ''
     if (type !== 'claude-code') return
@@ -74,7 +101,10 @@ class ConfigManager {
     const payload = settingsJson.trim() ? settingsJson : '{}'
 
     fs.mkdirSync(claudeHome, { recursive: true })
-    fs.writeFileSync(path.join(claudeHome, 'settings.json'), payload, 'utf8')
+    this.setSecurePermissions(claudeHome, true)
+    const filePath = path.join(claudeHome, 'settings.json')
+    fs.writeFileSync(filePath, payload, 'utf8')
+    this.setSecurePermissions(filePath, false)
   }
 
   deleteClaudeHomeFiles(configId) {
@@ -99,7 +129,10 @@ class ConfigManager {
     const payload = opencodeConfigJson.trim() ? opencodeConfigJson : this.getOpenCodeConfigTemplate()
 
     fs.mkdirSync(openCodeHome, { recursive: true })
-    fs.writeFileSync(path.join(openCodeHome, 'opencode.json'), payload, 'utf8')
+    this.setSecurePermissions(openCodeHome, true)
+    const filePath = path.join(openCodeHome, 'opencode.json')
+    fs.writeFileSync(filePath, payload, 'utf8')
+    this.setSecurePermissions(filePath, false)
   }
 
   deleteOpenCodeHomeFiles(configId) {
@@ -123,8 +156,13 @@ class ConfigManager {
     const auth = typeof config?.codexAuthJson === 'string' ? config.codexAuthJson : ''
 
     fs.mkdirSync(codexHome, { recursive: true })
-    fs.writeFileSync(path.join(codexHome, 'config.toml'), toml, 'utf8')
-    fs.writeFileSync(path.join(codexHome, 'auth.json'), auth, 'utf8')
+    this.setSecurePermissions(codexHome, true)
+    const configPath = path.join(codexHome, 'config.toml')
+    const authPath = path.join(codexHome, 'auth.json')
+    fs.writeFileSync(configPath, toml, 'utf8')
+    fs.writeFileSync(authPath, auth, 'utf8')
+    this.setSecurePermissions(configPath, false)
+    this.setSecurePermissions(authPath, false)
   }
 
   deleteCodexHomeFiles(configId) {
@@ -142,6 +180,7 @@ class ConfigManager {
     this.configs = store.configs
     // Keep Claude/Codex/OpenCode source files in sync.
     try {
+      this.ensureSecureRootDirectories()
       for (const cfg of this.configs) {
         this.writeClaudeHomeFiles(cfg)
         this.writeCodexHomeFiles(cfg)
@@ -212,36 +251,39 @@ class ConfigManager {
     return path.join(userData, 'configs.v1.enc')
   }
 
-  getPlainStorePath() {
-    const userData = app.getPath('userData')
-    return path.join(userData, 'configs.v1.json')
-  }
 
   getStorePath() {
     return this.getEncryptedStorePath()
   }
 
   notifyEncryptionUnavailable() {
-    if (process.env.MPS_SUPPRESS_DIALOGS === '1') return
+    if (process.env.MPS_SUPPRESS_DIALOGS === '1') {
+      app.quit()
+      return
+    }
     if (this._notifiedEncryptionUnavailable) return
     this._notifiedEncryptionUnavailable = true
 
     const message = [
-      '当前系统不支持 Electron safeStorage 加密（safeStorage.isEncryptionAvailable() = false）。',
-      '应用将改用未加密的本地文件保存配置（configs.v1.json，位于用户数据目录）。',
+      '当前系统不支持 Electron safeStorage 加密。',
       '',
-      '建议：检查系统密钥链/凭据服务是否可用，或更换支持的环境。'
+      '应用需要系统密钥链服务才能安全存储配置：',
+      '- Windows: DPAPI',
+      '- macOS: Keychain',
+      '- Linux: libsecret',
+      '',
+      '应用将退出以保护您的数据安全。'
     ].join('\n')
 
     try {
       dialog.showMessageBoxSync({
         type: 'error',
-        title: '配置加密不可用',
-        message
+        title: '加密存储不可用',
+        message,
+        buttons: ['退出']
       })
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
+    app.quit()
   }
 
   notifyRecoveredFromCorrupt(backupPath) {
@@ -278,16 +320,12 @@ class ConfigManager {
     if (this._storeCache) return this._storeCache
 
     const encPath = this.getEncryptedStorePath()
-    const plainPath = this.getPlainStorePath()
     const encryptionOk = this.ensureEncryptionAvailable()
-    const now = () => new Date().toISOString()
-
-    const loadPlain = () => {
-      if (!fs.existsSync(plainPath)) return null
-      const raw = fs.readFileSync(plainPath, 'utf8')
-      const parsed = JSON.parse(raw)
-      return this.normalizeStore(parsed)
+    if (!encryptionOk) {
+      throw new Error('加密存储不可用，应用无法启动')
     }
+
+    const now = () => new Date().toISOString()
 
     const loadEncrypted = () => {
       if (!fs.existsSync(encPath)) return null
@@ -301,64 +339,31 @@ class ConfigManager {
     const seedAndPersist = (status) => {
       const seeded = this.normalizeStore(this.seedInitialStore())
       this.writeStore(seeded)
-      this._lastLoadInfo = {
-        status,
-        at: now(),
-        migratedFromLegacy: this._lastSeedFromLegacy
-      }
+      this._lastLoadInfo = { status, at: now(), migratedFromLegacy: this._lastSeedFromLegacy }
       return seeded
     }
 
     try {
-      let store = null
-      if (encryptionOk) {
-        store = loadEncrypted() || loadPlain()
-        if (!store) {
-          store = seedAndPersist('created')
-          this._storeCache = store
-          return store
-        }
-        this._storeCache = store
-        if (!fs.existsSync(encPath)) {
-          try { this.writeStore(store) } catch (_) {}
-        }
-        this._lastLoadInfo = { status: 'loaded', at: now() }
-        return store
-      }
-
-      store = loadPlain()
+      const store = loadEncrypted()
       if (!store) {
-        store = seedAndPersist('created-plain')
-        this._storeCache = store
-        return store
+        const created = seedAndPersist('created')
+        this._storeCache = created
+        return created
       }
       this._storeCache = store
-      this._lastLoadInfo = { status: 'loaded-plain', at: now() }
+      this._lastLoadInfo = { status: 'loaded', at: now() }
       return store
     } catch (err) {
-      // Corrupted or unreadable store: back it up and recreate defaults.
       console.warn('[ConfigManager] Store corrupted/unreadable; backing up and recreating defaults.', err)
       let backupPath = null
-      const badPath = encryptionOk ? encPath : plainPath
       try {
-        if (fs.existsSync(badPath)) {
-          backupPath = `${badPath}.corrupt.${Date.now()}.bak`
-          fs.renameSync(badPath, backupPath)
+        if (fs.existsSync(encPath)) {
+          backupPath = `${encPath}.corrupt.${Date.now()}.bak`
+          fs.renameSync(encPath, backupPath)
         }
-      } catch (_) {
-        // ignore
-      }
+      } catch (_) {}
 
-      let recovered = null
-      if (encryptionOk) {
-        try {
-          recovered = loadPlain()
-        } catch (_) {
-          recovered = null
-        }
-      }
-
-      const seeded = recovered || this.normalizeStore(this.seedInitialStore())
+      const seeded = this.normalizeStore(this.seedInitialStore())
       try { this.writeStore(seeded) } catch (_) {}
       if (backupPath) this.notifyRecoveredFromCorrupt(backupPath)
       this._lastLoadInfo = { status: 'recovered-from-corrupt', at: now(), backupPath }
@@ -370,8 +375,9 @@ class ConfigManager {
   normalizeStore(store) {
     const now = new Date().toISOString()
     const normalizedConfigs = Array.isArray(store?.configs) ? store.configs.map(c => this.normalizeConfig(c)) : []
-    const configs = normalizedConfigs.length > 0
-      ? normalizedConfigs
+    const validConfigs = normalizedConfigs.filter(cfg => VALID_TYPES.has(cfg.type))
+    const configs = validConfigs.length > 0
+      ? validConfigs
       : this.createDefaultConfigs()
 
     return {
@@ -440,30 +446,22 @@ class ConfigManager {
     const normalized = this.normalizeStore(store)
     this._storeCache = normalized
 
-    const json = JSON.stringify(normalized)
-    const encryptionOk = this.isEncryptionAvailable()
-
-    const encPath = this.getEncryptedStorePath()
-    const plainPath = this.getPlainStorePath()
-
-    if (encryptionOk) {
-      try {
-        const encrypted = safeStorage.encryptString(json)
-        const payloadB64 = encrypted.toString('base64')
-        fs.mkdirSync(path.dirname(encPath), { recursive: true })
-        const tmpPath = `${encPath}.tmp`
-        fs.writeFileSync(tmpPath, payloadB64, 'utf8')
-        fs.renameSync(tmpPath, encPath)
-        return
-      } catch (err) {
-        console.warn('[ConfigManager] Encryption failed; falling back to plain store.', err)
-      }
+    if (!this.isEncryptionAvailable()) {
+      throw new Error('加密存储不可用，无法保存配置')
     }
 
-    fs.mkdirSync(path.dirname(plainPath), { recursive: true })
-    const tmpPath = `${plainPath}.tmp`
-    fs.writeFileSync(tmpPath, json, 'utf8')
-    fs.renameSync(tmpPath, plainPath)
+    const json = JSON.stringify(normalized)
+    const encrypted = safeStorage.encryptString(json)
+    const payloadB64 = encrypted.toString('base64')
+    const encPath = this.getEncryptedStorePath()
+    const dirPath = path.dirname(encPath)
+    fs.mkdirSync(dirPath, { recursive: true })
+    this.setSecurePermissions(dirPath, true)
+    const tmpPath = `${encPath}.tmp`
+    fs.writeFileSync(tmpPath, payloadB64, 'utf8')
+    this.setSecurePermissions(tmpPath, false)
+    fs.renameSync(tmpPath, encPath)
+    this.setSecurePermissions(encPath, false)
   }
 
   seedInitialStore() {
@@ -532,7 +530,9 @@ class ConfigManager {
             workingDirectory: ''
           }))
         }
-        return parsed
+        const filtered = parsed.filter(cfg => VALID_TYPES.has(cfg.type))
+        if (filtered.length === 0) continue
+        return filtered
       } catch (_) {
         // ignore and keep trying
       }

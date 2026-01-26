@@ -11,9 +11,6 @@ class DraftManager {
     return path.join(app.getPath('userData'), 'drafts.v1.enc')
   }
 
-  getPlainStorePath() {
-    return path.join(app.getPath('userData'), 'drafts.v1.json')
-  }
 
   isEncryptionAvailable() {
     try {
@@ -26,20 +23,13 @@ class DraftManager {
   loadStore() {
     if (this._storeCache) return this._storeCache
 
+    if (!this.isEncryptionAvailable()) {
+      throw new Error('加密存储不可用，无法加载草稿')
+    }
+
     const now = new Date().toISOString()
     const seeded = { version: 1, updatedAt: now, drafts: {} }
-
     const encPath = this.getEncryptedStorePath()
-    const plainPath = this.getPlainStorePath()
-
-    const encryptionOk = this.isEncryptionAvailable()
-
-    const loadPlain = () => {
-      if (!fs.existsSync(plainPath)) return seeded
-      const raw = fs.readFileSync(plainPath, 'utf8')
-      const parsed = JSON.parse(raw)
-      return this.normalizeStore(parsed)
-    }
 
     const loadEncrypted = () => {
       if (!fs.existsSync(encPath)) return seeded
@@ -51,20 +41,16 @@ class DraftManager {
     }
 
     try {
-      const store = encryptionOk ? loadEncrypted() : loadPlain()
+      const store = loadEncrypted()
       this._storeCache = store
       return store
     } catch (err) {
-      // Corrupt store; back it up and recreate.
       try {
-        const badPath = encryptionOk ? encPath : plainPath
-        if (fs.existsSync(badPath)) {
-          const backup = `${badPath}.corrupt.${Date.now()}.bak`
-          fs.renameSync(badPath, backup)
+        if (fs.existsSync(encPath)) {
+          const backup = `${encPath}.corrupt.${Date.now()}.bak`
+          fs.renameSync(encPath, backup)
         }
-      } catch (_) {
-        // ignore
-      }
+      } catch (_) {}
       this._storeCache = seeded
       return seeded
     }
@@ -88,26 +74,18 @@ class DraftManager {
     const normalized = this.normalizeStore(store)
     this._storeCache = normalized
 
-    const encryptionOk = this.isEncryptionAvailable()
-    const encPath = this.getEncryptedStorePath()
-    const plainPath = this.getPlainStorePath()
-
-    const json = JSON.stringify(normalized)
-
-    if (encryptionOk) {
-      const encrypted = safeStorage.encryptString(json)
-      const payloadB64 = encrypted.toString('base64')
-      fs.mkdirSync(path.dirname(encPath), { recursive: true })
-      const tmp = `${encPath}.tmp`
-      fs.writeFileSync(tmp, payloadB64, 'utf8')
-      fs.renameSync(tmp, encPath)
-      return
+    if (!this.isEncryptionAvailable()) {
+      throw new Error('加密存储不可用，无法保存草稿')
     }
 
-    fs.mkdirSync(path.dirname(plainPath), { recursive: true })
-    const tmp = `${plainPath}.tmp`
-    fs.writeFileSync(tmp, json, 'utf8')
-    fs.renameSync(tmp, plainPath)
+    const json = JSON.stringify(normalized)
+    const encrypted = safeStorage.encryptString(json)
+    const payloadB64 = encrypted.toString('base64')
+    const encPath = this.getEncryptedStorePath()
+    fs.mkdirSync(path.dirname(encPath), { recursive: true })
+    const tmp = `${encPath}.tmp`
+    fs.writeFileSync(tmp, payloadB64, 'utf8')
+    fs.renameSync(tmp, encPath)
   }
 
   loadDraft(key) {

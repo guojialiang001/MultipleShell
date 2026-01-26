@@ -18,7 +18,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   draftLoad: (key) => ipcRenderer.invoke('draft:load', key),
   draftSave: (key, value) => ipcRenderer.invoke('draft:save', key, value),
   draftDelete: (key) => ipcRenderer.invoke('draft:delete', key),
-  transcribeAudio: (payload) => ipcRenderer.invoke('audio:transcribe', payload),
+  voiceGetApiKey: () => ipcRenderer.invoke('voice:getApiKey'),
+  voiceSetApiKey: (key) => ipcRenderer.invoke('voice:setApiKey', key),
+  voiceTranscribe: (audioData, format) => ipcRenderer.invoke('voice:transcribe', { audioData, format }),
   onTerminalData: (sessionId, callback) => {
     const handler = (event, { sessionId: sid, data }) => {
       if (sid === sessionId) callback(data)

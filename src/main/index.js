@@ -3,10 +3,8 @@ const path = require('path')
 const configManager = require('./config-manager')
 const draftManager = require('./draft-manager')
 const ptyManager = require('./pty-manager')
+const voiceService = require('./voice-service')
 
-const TRANSCRIPTION_ENDPOINT = 'https://api.siliconflow.cn/v1/audio/transcriptions'
-const TRANSCRIPTION_TOKEN = 'sk-yyqmrkevamdfuilmfdlfmjzuatoytqlywfalkjkfrzkffvdr'
-const TRANSCRIPTION_MODEL = 'FunAudioLLM/SenseVoiceSmall'
 
 let mainWindow
 let selectFolderPromise
@@ -16,6 +14,9 @@ function createWindow() {
     width: 1200,
     height: 800,
     frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    roundedCorners: true,
     icon: path.join(__dirname, '../../build/icon.ico'),
     resizable: true,
     maximizable: true,
@@ -26,7 +27,8 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     }
   })
   mainWindow.setMenuBarVisibility(false)
@@ -74,6 +76,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  ptyManager.cleanupOrphanedTempDirs()
   configManager.loadConfigs()
   Menu.setApplicationMenu(null)
   createWindow()
@@ -91,20 +94,59 @@ ipcMain.handle('save-config', (event, config) => configManager.saveConfig(config
 ipcMain.handle('delete-config', (event, configId) => configManager.deleteConfig(configId))
 
 ipcMain.handle('create-terminal', (event, config, workingDir) => {
+  if (!config || typeof config !== 'object') {
+    throw new Error('Invalid config')
+  }
+  if (workingDir && typeof workingDir !== 'string') {
+    throw new Error('Invalid workingDir')
+  }
   return ptyManager.createSession(config, workingDir, mainWindow)
 })
 
 ipcMain.handle('write-terminal', (event, sessionId, data) => {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) {
+    throw new Error('Invalid sessionId')
+  }
+  if (typeof data !== 'string') {
+    throw new Error('Invalid data')
+  }
+  if (data.length > 1024 * 1024) {
+    throw new Error('Data too large')
+  }
   ptyManager.writeToSession(sessionId, data)
 })
 
 ipcMain.handle('resize-terminal', (event, sessionId, cols, rows) => {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) {
+    throw new Error('Invalid sessionId')
+  }
+  if (!Number.isInteger(cols) || cols < 1 || cols > 1000) {
+    throw new Error('Invalid cols')
+  }
+  if (!Number.isInteger(rows) || rows < 1 || rows > 1000) {
+    throw new Error('Invalid rows')
+  }
   ptyManager.resizeSession(sessionId, cols, rows)
 })
 
 ipcMain.handle('kill-terminal', (event, sessionId) => {
   ptyManager.killSession(sessionId)
 })
+
+const FORBIDDEN_PATHS = [
+  'C:\\Windows\\System32',
+  'C:\\Windows\\SysWOW64',
+  'C:\\Program Files',
+  'C:\\Program Files (x86)'
+]
+
+function isPathSafe(selectedPath) {
+  if (!selectedPath) return false
+  const normalized = path.normalize(selectedPath).toLowerCase()
+  return !FORBIDDEN_PATHS.some(forbidden =>
+    normalized.startsWith(path.normalize(forbidden).toLowerCase())
+  )
+}
 
 ipcMain.handle('select-folder', async () => {
   if (selectFolderPromise) {
@@ -114,7 +156,15 @@ ipcMain.handle('select-folder', async () => {
   selectFolderPromise = dialog.showOpenDialog({ properties: ['openDirectory'] })
   try {
     const result = await selectFolderPromise
-    return result.canceled ? null : result.filePaths[0]
+    if (!result.canceled && result.filePaths[0]) {
+      const selectedPath = result.filePaths[0]
+      if (!isPathSafe(selectedPath)) {
+        dialog.showErrorBox('路径不安全', '不允许选择系统目录')
+        return null
+      }
+      return selectedPath
+    }
+    return null
   } finally {
     selectFolderPromise = null
   }
@@ -159,51 +209,3 @@ ipcMain.handle('draft:delete', (event, key) => {
   return draftManager.deleteDraft(key)
 })
 
-ipcMain.handle('audio:transcribe', async (event, payload) => {
-  const audioBuffer = payload?.audioBuffer
-  if (!audioBuffer) {
-    throw new Error('Missing audio buffer')
-  }
-
-  const fileName = payload?.fileName || 'voice.wav'
-  const mimeType = payload?.mimeType || 'application/octet-stream'
-  const model = payload?.model || TRANSCRIPTION_MODEL
-
-  if (typeof fetch !== 'function') {
-    throw new Error('Fetch API unavailable')
-  }
-  if (typeof FormData !== 'function' || typeof Blob !== 'function') {
-    throw new Error('FormData API unavailable')
-  }
-
-  const buffer = Buffer.from(audioBuffer)
-  const form = new FormData()
-  const blob = new Blob([buffer], { type: mimeType })
-  form.append('file', blob, fileName)
-  form.append('model', model)
-
-  const response = await fetch(TRANSCRIPTION_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${TRANSCRIPTION_TOKEN}`,
-      Accept: '*/*',
-      'User-Agent': 'Apifox/1.0.0 (https://apifox.com)'
-    },
-    body: form
-  })
-
-  const raw = await response.text()
-  let data = null
-  try {
-    data = JSON.parse(raw)
-  } catch (_) {
-    data = { text: raw }
-  }
-
-  if (!response.ok) {
-    const message = data?.message || data?.error || raw || `HTTP ${response.status}`
-    throw new Error(message)
-  }
-
-  return data
-})

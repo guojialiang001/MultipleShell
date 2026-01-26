@@ -156,6 +156,17 @@ const switchConfigMode = (mode) => {
 }
 
 const closeTab = async (tabId) => {
+  const target = tabs.value.find(t => t.id === tabId)
+  if (target?.pending) {
+    const index = tabs.value.findIndex(t => t.id === tabId)
+    if (index !== -1) tabs.value.splice(index, 1)
+    if (pendingTabId.value === tabId) pendingTabId.value = null
+    showConfigSelector.value = false
+    if (activeTabId.value === tabId) {
+      activeTabId.value = tabs.value.length > 0 ? tabs.value[0].id : null
+    }
+    return
+  }
   await window.electronAPI.killTerminal(tabId)
   const index = tabs.value.findIndex(t => t.id === tabId)
   if (index !== -1) tabs.value.splice(index, 1)
@@ -314,16 +325,13 @@ const sendTranscriptToTerminal = (text) => {
 }
 
 const submitForTranscription = async (audioBlob, fileName, mimeType) => {
-  if (!window?.electronAPI?.transcribeAudio) {
+  if (!window?.electronAPI?.voiceTranscribe) {
     throw new Error('Transcription API unavailable')
   }
   const audioBuffer = await audioBlob.arrayBuffer()
-  return window.electronAPI.transcribeAudio({
-    audioBuffer,
-    fileName,
-    mimeType,
-    model: TRANSCRIPTION_MODEL
-  })
+  const audioArray = Array.from(new Uint8Array(audioBuffer))
+  const format = mimeType.split('/')[1] || 'webm'
+  return window.electronAPI.voiceTranscribe(audioArray, format)
 }
 
 const handleRecordingStop = async () => {
@@ -549,25 +557,25 @@ const toggleVoiceCapture = () => {
 
 <style>
 :root {
-  --bg-color: #09090b; /* Zinc 950 */
-  --surface-color: #18181b; /* Zinc 900 */
-  --surface-hover: #27272a; /* Zinc 800 */
-  --surface-active: #3f3f46; /* Zinc 700 */
-  --border-color: #27272a;
+  --bg-color: #0a0a0a; /* Neutral Deep Black */
+  --surface-color: #161616; /* Soft Dark Gray */
+  --surface-hover: #222222;
+  --surface-active: #333333;
+  --border-color: #262626;
   
-  --primary-color: #3b82f6; /* Blue 500 */
-  --primary-hover: #2563eb; /* Blue 600 */
+  --primary-color: #3f72c4; /* Soft Blue - Comfortable */
+  --primary-hover: #2d5fb3;
   
-  --text-primary: #e4e4e7; /* Zinc 200 */
-  --text-secondary: #a1a1aa; /* Zinc 400 */
+  --text-primary: #e5e5e5; /* Soft White */
+  --text-secondary: #a3a3a3; /* Neutral Gray */
   
-  --danger-color: #ef4444;
-  --success-color: #22c55e;
+  --danger-color: #f87171; /* Soft Red */
+  --success-color: #4ade80; /* Soft Green */
   
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
 }
 
 * {
@@ -582,16 +590,22 @@ html,
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: var(--bg-color);
+  background-color: transparent;
   color: var(--text-primary);
   font-family: var(--font-family);
   font-size: 14px;
+  border-radius: var(--radius-lg);
+  clip-path: inset(0 round var(--radius-lg));
 }
 
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background-color: var(--bg-color);
+  clip-path: inset(0 round var(--radius-lg));
 }
 
 .content {
@@ -607,7 +621,7 @@ html,
   flex: 1;
   width: 100%;
   min-height: 0;
-  background-color: #000000; /* Terminals usually look best on pure black */
+  background-color: var(--bg-color);
 }
 
 /* Modal Overlay */
@@ -767,7 +781,7 @@ html,
 kbd {
   background: var(--surface-active);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: monospace;
   font-size: 0.9em;
   border: 1px solid var(--border-color);
@@ -813,7 +827,7 @@ button {
 
 ::-webkit-scrollbar-thumb {
   background: var(--surface-active);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   border: 2px solid var(--bg-color);
 }
 

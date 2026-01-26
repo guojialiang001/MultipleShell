@@ -276,26 +276,26 @@ onMounted(() => {
     disableStdin: false, // 我们手动控制
     convertEol: false,
     theme: {
-      background: '#09090b',
-      foreground: '#e4e4e7',
-      cursor: '#3b82f6',
-      selectionBackground: 'rgba(59, 130, 246, 0.3)',
-      selectionInactiveBackground: 'rgba(59, 130, 246, 0.3)',
-      black: '#000000',
-      red: '#ef4444',
-      green: '#22c55e',
-      yellow: '#eab308',
-      blue: '#3b82f6',
-      magenta: '#a855f7',
-      cyan: '#06b6d4',
-      white: '#e4e4e7',
-      brightBlack: '#71717a',
-      brightRed: '#f87171',
-      brightGreen: '#4ade80',
-      brightYellow: '#facc15',
-      brightBlue: '#60a5fa',
-      brightMagenta: '#c084fc',
-      brightCyan: '#22d3ee',
+      background: '#0a0a0a',
+      foreground: '#e5e5e5',
+      cursor: '#93c5fd',
+      selectionBackground: 'rgba(147, 197, 253, 0.3)',
+      selectionInactiveBackground: 'rgba(147, 197, 253, 0.15)',
+      black: '#161616',
+      red: '#f87171',
+      green: '#4ade80',
+      yellow: '#facc15',
+      blue: '#60a5fa',
+      magenta: '#c084fc',
+      cyan: '#22d3ee',
+      white: '#e5e5e5',
+      brightBlack: '#737373',
+      brightRed: '#fca5a5',
+      brightGreen: '#86efac',
+      brightYellow: '#fde047',
+      brightBlue: '#93c5fd',
+      brightMagenta: '#d8b4fe',
+      brightCyan: '#67e8f9',
       brightWhite: '#ffffff'
     }
   })
@@ -349,16 +349,20 @@ onMounted(() => {
     // 三重检查：阻止标志、实时选择状态、上次选择状态
     const currentSelection = terminal.hasSelection()
     if (keyboardBlocked || currentSelection || lastSelectionState) {
-      console.log('🚫 Input completely blocked:', {
-        data: data,
-        charCode: data.charCodeAt(0),
-        keyboardBlocked,
-        currentSelection,
-        lastSelectionState
-      })
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🚫 Input completely blocked:', {
+          data: data,
+          charCode: data.charCodeAt(0),
+          keyboardBlocked,
+          currentSelection,
+          lastSelectionState
+        })
+      }
       return // 完全不发送任何数据
     }
-    console.log('✅ Input allowed:', data)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('✅ Input allowed:', data)
+    }
     window.electronAPI.writeToTerminal(props.sessionId, data)
   })
 
@@ -383,11 +387,13 @@ onMounted(() => {
       scheduleFlushAfterGuard()
     }
 
-    console.log('🔄 Selection state changed:', {
-      hasSelection,
-      selectionChanged,
-      keyboardBlocked
-    })
+    if (process.env.NODE_ENV === 'development') {
+      console.log('🔄 Selection state changed:', {
+        hasSelection,
+        selectionChanged,
+        keyboardBlocked
+      })
+    }
 
     // 如果有选择，延迟一段时间保持阻止状态
     if (hasSelection) {
@@ -395,7 +401,9 @@ onMounted(() => {
         if (!terminal.hasSelection()) {
           keyboardBlocked = false
           lastSelectionState = false
-          console.log('⏰ Delayed unblock - selection cleared')
+          if (process.env.NODE_ENV === 'development') {
+            console.log('⏰ Delayed unblock - selection cleared')
+          }
         }
       }, 100) // 100ms的缓冲时间
     }
@@ -454,14 +462,16 @@ onMounted(() => {
     }
     const currentSelection = terminal.hasSelection()
     if (keyboardBlocked || currentSelection || lastSelectionState) {
-      console.log('🚫 Keyboard event blocked:', {
-        type: e.type,
-        key: e.key,
-        code: e.code,
-        keyboardBlocked,
-        currentSelection,
-        lastSelectionState
-      })
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🚫 Keyboard event blocked:', {
+          type: e.type,
+          key: e.key,
+          code: e.code,
+          keyboardBlocked,
+          currentSelection,
+          lastSelectionState
+        })
+      }
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
@@ -479,7 +489,9 @@ onMounted(() => {
   // 阻止可能的粘贴和其他输入方式
   pasteHandler = (e) => {
     if (keyboardBlocked || terminal.hasSelection() || lastSelectionState) {
-      console.log('🚫 Paste blocked due to selection')
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🚫 Paste blocked due to selection')
+      }
       e.preventDefault()
       return false
     }
@@ -489,7 +501,9 @@ onMounted(() => {
   // 阻止拖拽输入
   dropHandler = (e) => {
     if (keyboardBlocked || terminal.hasSelection() || lastSelectionState) {
-      console.log('🚫 Drop blocked due to selection')
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🚫 Drop blocked due to selection')
+      }
       e.preventDefault()
       return false
     }
@@ -556,10 +570,14 @@ const handleMouseUp = (e) => {
     isSelecting = hasSelection
 
     if (hasSelection) {
-      console.log('🎯 Mouse up: selection detected, input will be blocked')
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🎯 Mouse up: selection detected, input will be blocked')
+      }
       extendSelectionGuard()
     } else {
-      console.log('🎯 Mouse up: no selection, input allowed')
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🎯 Mouse up: no selection, input allowed')
+      }
       scheduleFlushAfterGuard()
     }
   }, 20) // 稍微延迟确保xterm完成选择处理
@@ -658,7 +676,7 @@ onUnmounted(() => {
   height: 100%;
   padding: 8px;
   box-sizing: border-box;
-  background: #09090b;
+  background: #0a0a0a;
 }
 
 .terminal-container {
