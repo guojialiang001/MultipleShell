@@ -342,8 +342,8 @@ watch(
 }
 
 .path-segment--tab {
-  flex: 0 0 100px;
-  max-width: 100px;
+  flex: 0 1 auto;
+  max-width: 240px;
 }
 
 .path-segment--cwd {
@@ -372,6 +372,7 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   color: rgba(255, 255, 255, 0.85);
+  max-width: 240px;
 }
 
 .path-value {
