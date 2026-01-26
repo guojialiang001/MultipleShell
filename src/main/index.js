@@ -9,6 +9,7 @@ const TRANSCRIPTION_TOKEN = 'sk-yyqmrkevamdfuilmfdlfmjzuatoytqlywfalkjkfrzkffvdr
 const TRANSCRIPTION_MODEL = 'FunAudioLLM/SenseVoiceSmall'
 
 let mainWindow
+let selectFolderPromise
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -106,8 +107,17 @@ ipcMain.handle('kill-terminal', (event, sessionId) => {
 })
 
 ipcMain.handle('select-folder', async () => {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-  return result.canceled ? null : result.filePaths[0]
+  if (selectFolderPromise) {
+    const result = await selectFolderPromise
+    return result.canceled ? null : result.filePaths[0]
+  }
+  selectFolderPromise = dialog.showOpenDialog({ properties: ['openDirectory'] })
+  try {
+    const result = await selectFolderPromise
+    return result.canceled ? null : result.filePaths[0]
+  } finally {
+    selectFolderPromise = null
+  }
 })
 
 ipcMain.handle('get-default-cwd', () => {

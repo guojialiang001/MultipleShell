@@ -301,6 +301,13 @@ class PTYManager {
       psArgs = ['-NoExit', '-Command', cmd]
     }
     
+    const sendToWindow = (channel, payload) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      const contents = mainWindow.webContents
+      if (!contents || contents.isDestroyed()) return
+      contents.send(channel, payload)
+    }
+
     const ptyProcess = pty.spawn('powershell.exe', psArgs, {
       name: 'xterm-color',
       cols: 80,
@@ -310,11 +317,11 @@ class PTYManager {
     })
     
     ptyProcess.onData(data => {
-      mainWindow.webContents.send('terminal:data', { sessionId, data })
+      sendToWindow('terminal:data', { sessionId, data })
     })
     
     ptyProcess.onExit(({ exitCode }) => {
-      mainWindow.webContents.send('terminal:exit', { sessionId, code: exitCode })
+      sendToWindow('terminal:exit', { sessionId, code: exitCode })
       this.cleanupCodexHome(sessionId)
       this.sessions.delete(sessionId)
     })

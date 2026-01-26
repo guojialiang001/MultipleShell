@@ -16,6 +16,7 @@ const selectedConfig = ref(null)
 const customWorkingDir = ref('')
 const showEditor = ref(false)
 const editingConfig = ref(null)
+const isSelectingFolder = ref(false)
 
 watch(
   () => props.mode,
@@ -39,8 +40,14 @@ watch(
 )
 
 const selectFolder = async () => {
-  const result = await window.electronAPI.selectFolder()
-  if (result) customWorkingDir.value = result
+  if (isSelectingFolder.value) return
+  isSelectingFolder.value = true
+  try {
+    const result = await window.electronAPI.selectFolder()
+    if (result) customWorkingDir.value = result
+  } finally {
+    isSelectingFolder.value = false
+  }
 }
 
 const toPlain = (obj) => {
@@ -145,7 +152,9 @@ const headerTitle = computed(() => {
           <div class="input-wrapper">
              <input v-model="customWorkingDir" type="text" :placeholder="t('configSelector.defaultCwd', { default: t('configSelector.userProfile') })" readonly />
           </div>
-          <button @click="selectFolder" class="btn-secondary">{{ t('configSelector.browse') }}</button>
+          <button @click="selectFolder" class="btn-secondary" :disabled="isSelectingFolder">
+            {{ t('configSelector.browse') }}
+          </button>
         </div>
       </div>
     </div>
@@ -381,6 +390,11 @@ input:focus {
 .btn-secondary:hover {
   background: var(--surface-hover);
   border-color: var(--text-secondary);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .btn-ghost {

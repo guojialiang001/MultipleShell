@@ -15,7 +15,10 @@ export default {
   app: {
     noActiveTerminals: '没有活动终端',
     pressCtrlT: '按 {shortcut} 开始新会话',
-    newTerminal: '新建终端'
+    newTerminal: '新建终端',
+    confirmExitTitle: '确认关闭应用？',
+    confirmExitPrompt: '输入 {keyword} 关闭应用。',
+    confirmExitPlaceholder: '输入 {keyword} 确认'
   },
 
   voice: {

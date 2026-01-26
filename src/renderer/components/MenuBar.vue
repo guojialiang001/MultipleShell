@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setLocale } from '../i18n'
 
@@ -23,8 +23,31 @@ const toggleMaximizeWindow = () => {
   window?.electronAPI?.windowToggleMaximize?.()
 }
 
-const closeWindow = () => {
+const showClosePrompt = ref(false)
+const closePromptInput = ref('')
+const closeInputRef = ref(null)
+
+const isCloseInputValid = computed(() => closePromptInput.value.trim().toLowerCase() === 'close')
+
+const openClosePrompt = () => {
+  closePromptInput.value = ''
+  showClosePrompt.value = true
+  nextTick(() => closeInputRef.value?.focus())
+}
+
+const dismissClosePrompt = () => {
+  showClosePrompt.value = false
+  closePromptInput.value = ''
+}
+
+const confirmClosePrompt = () => {
+  if (!isCloseInputValid.value) return
+  dismissClosePrompt()
   window?.electronAPI?.windowClose?.()
+}
+
+const closeWindow = () => {
+  openClosePrompt()
 }
 
 const changeLanguage = (next) => {
@@ -121,6 +144,36 @@ const closeSettings = () => {
       </div>
     </transition>
   </teleport>
+
+  <Transition name="fade">
+    <div v-if="showClosePrompt" class="tab-close-overlay" @click.self="dismissClosePrompt">
+      <div class="tab-close-modal" @click.stop>
+        <div class="tab-close-header">{{ t('app.confirmExitTitle') }}</div>
+        <div class="tab-close-message">{{ t('app.confirmExitPrompt', { keyword: 'close' }) }}</div>
+        <input
+          ref="closeInputRef"
+          v-model="closePromptInput"
+          class="tab-close-input"
+          :placeholder="t('app.confirmExitPlaceholder', { keyword: 'close' })"
+          @keydown.enter.prevent="confirmClosePrompt"
+          @keydown.esc.prevent="dismissClosePrompt"
+        />
+        <div class="tab-close-actions">
+          <button class="tab-close-btn tab-close-btn--ghost" type="button" @click="dismissClosePrompt">
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            class="tab-close-btn tab-close-btn--danger"
+            type="button"
+            :disabled="!isCloseInputValid"
+            @click="confirmClosePrompt"
+          >
+            {{ t('common.close') }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -354,5 +407,94 @@ const closeSettings = () => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.tab-close-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-close-modal {
+  width: min(420px, 90vw);
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.tab-close-header {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tab-close-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.tab-close-input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  outline: none;
+  font-size: 13px;
+}
+
+.tab-close-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+
+.tab-close-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tab-close-btn {
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.tab-close-btn--ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.tab-close-btn--danger {
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.tab-close-btn--danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fecaca;
+}
+
+.tab-close-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 </style>

@@ -1,11 +1,13 @@
 {
   "name": "multiple-shell",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "main": "src/main/index.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build && electron-builder",
     "build:win": "vite build && electron-builder --win",
+    "build:win:x64": "vite build && electron-builder --win --x64",
+    "build:win:ia32": "vite build && electron-builder --win --ia32",
     "selfcheck:rpd": "set MPS_SUPPRESS_DIALOGS=1&& electron .\\scripts\\rpd-selfcheck-electron.js"
   },
   "dependencies": {

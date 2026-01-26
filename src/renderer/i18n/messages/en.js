@@ -15,7 +15,10 @@ export default {
   app: {
     noActiveTerminals: 'No Active Terminals',
     pressCtrlT: 'Press {shortcut} to start a new session',
-    newTerminal: 'New Terminal'
+    newTerminal: 'New Terminal',
+    confirmExitTitle: 'Close MultipleShell?',
+    confirmExitPrompt: 'Type {keyword} to close the app.',
+    confirmExitPlaceholder: 'Type {keyword} to confirm'
   },
   voice: {
     start: 'Voice Input',
