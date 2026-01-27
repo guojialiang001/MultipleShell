@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   killTerminal: (sessionId) => ipcRenderer.invoke('kill-terminal', sessionId),
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   getDefaultCwd: () => ipcRenderer.invoke('get-default-cwd'),
+  appGetVersion: () => ipcRenderer.invoke('app:getVersion'),
+  updateGetStatus: () => ipcRenderer.invoke('update:getStatus'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateQuitAndInstall: () => ipcRenderer.invoke('update:quitAndInstall'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:readText'),
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
@@ -28,6 +32,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('terminal:data', handler)
     return () => ipcRenderer.removeListener('terminal:data', handler)
   },
+  onUpdateStatus: (callback) => {
+    const handler = (event, payload) => callback(payload)
+    ipcRenderer.on('update:status', handler)
+    return () => ipcRenderer.removeListener('update:status', handler)
+  },
+
   onTerminalExit: (sessionId, callback) => {
     const handler = (event, { sessionId: sid, code }) => {
       if (sid === sessionId) callback(code)

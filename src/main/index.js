@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, clipboard, Menu } = require('electron')
+const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const configManager = require('./config-manager')
 const draftManager = require('./draft-manager')
@@ -8,6 +9,75 @@ const voiceService = require('./voice-service')
 
 let mainWindow
 let selectFolderPromise
+
+const updateState = {
+  state: 'idle',
+  version: null,
+  progress: null,
+  error: null
+}
+let updaterReady = false
+let updateInterval = null
+
+const pushUpdateState = (patch = {}) => {
+  Object.assign(updateState, patch)
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('update:status', updateState)
+  }
+}
+
+const initAutoUpdater = () => {
+  const updateUrl = process.env.MPS_UPDATE_URL
+  const allowDev = process.env.MPS_UPDATE_DEV === '1'
+
+  if (!updateUrl) {
+    pushUpdateState({ state: 'disabled', error: null })
+    return
+  }
+
+  if (!app.isPackaged && !allowDev) {
+    pushUpdateState({ state: 'disabled', error: null })
+    return
+  }
+
+  updaterReady = true
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.setFeedURL({ provider: 'generic', url: updateUrl })
+
+  autoUpdater.on('checking-for-update', () => {
+    pushUpdateState({ state: 'checking', error: null })
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    pushUpdateState({ state: 'available', version: info?.version || null, error: null })
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    pushUpdateState({ state: 'not-available', error: null })
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    const percent = Math.round(progress?.percent || 0)
+    pushUpdateState({ state: 'downloading', progress: percent, error: null })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    pushUpdateState({ state: 'downloaded', version: info?.version || null, error: null })
+  })
+
+  autoUpdater.on('error', (err) => {
+    pushUpdateState({ state: 'error', error: err?.message || String(err) })
+  })
+
+  autoUpdater.checkForUpdates().catch((err) => {
+    pushUpdateState({ state: 'error', error: err?.message || String(err) })
+  })
+
+  updateInterval = setInterval(() => {
+    autoUpdater.checkForUpdates().catch(() => {})
+  }, 6 * 60 * 60 * 1000)
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -80,6 +150,7 @@ app.whenReady().then(() => {
   configManager.loadConfigs()
   Menu.setApplicationMenu(null)
   createWindow()
+  initAutoUpdater()
 })
 
 app.on('window-all-closed', () => {
@@ -172,6 +243,26 @@ ipcMain.handle('select-folder', async () => {
 
 ipcMain.handle('get-default-cwd', () => {
   return process.env.USERPROFILE || ''
+})
+
+ipcMain.handle('app:getVersion', () => app.getVersion())
+
+ipcMain.handle('update:getStatus', () => updateState)
+
+ipcMain.handle('update:check', async () => {
+  if (!updaterReady) return updateState
+  try {
+    await autoUpdater.checkForUpdates()
+  } catch (err) {
+    pushUpdateState({ state: 'error', error: err?.message || String(err) })
+  }
+  return updateState
+})
+
+ipcMain.handle('update:quitAndInstall', () => {
+  if (!updaterReady) return false
+  autoUpdater.quitAndInstall()
+  return true
 })
 
 ipcMain.handle('window:minimize', () => {

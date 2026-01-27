@@ -1,11 +1,50 @@
 <script setup>
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setLocale } from '../i18n'
 
 const emit = defineEmits(['openConfig'])
 const showSettings = ref(false)
+const version = ref('')
+const updateState = ref({ state: 'idle' })
+let unsubscribeUpdate = null
+
 const { t, locale } = useI18n()
+
+const updateStatus = computed(() => updateState.value?.state || 'idle')
+const updateProgress = computed(() => {
+  const raw = Number(updateState.value?.progress)
+  return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : null
+})
+const versionLabel = computed(() => (version.value ? `v${version.value}` : ''))
+const updateLabel = computed(() => {
+  const status = updateStatus.value
+  const nextVersion = updateState.value?.version ? `v${updateState.value.version}` : ''
+
+  if (status === 'checking') return t('updates.checking')
+  if (status === 'available') return nextVersion ? t('updates.availableWithVersion', { version: nextVersion }) : t('updates.available')
+  if (status === 'downloading') return t('updates.downloading', { progress: updateProgress.value ?? 0 })
+  if (status === 'downloaded') return t('updates.downloaded')
+  if (status === 'not-available') return t('updates.latest')
+  if (status === 'error') return t('updates.error')
+  if (status === 'disabled') return t('updates.disabled')
+  return t('updates.check')
+})
+const updateChipClass = computed(() => ({
+  'update-chip--latest': updateStatus.value === 'not-available',
+  'update-chip--available': updateStatus.value === 'available' || updateStatus.value === 'downloaded',
+  'update-chip--downloading': updateStatus.value === 'checking' || updateStatus.value === 'downloading',
+  'update-chip--error': updateStatus.value === 'error',
+  'update-chip--disabled': updateStatus.value === 'disabled'
+}))
+const updateActionDisabled = computed(() =>
+  updateStatus.value === 'checking' || updateStatus.value === 'downloading' || updateStatus.value === 'disabled'
+)
+const updateTitle = computed(() => {
+  if (updateStatus.value === 'downloaded') return t('updates.actionRestart')
+  if (updateStatus.value === 'disabled') return t('updates.disabled')
+  return t('updates.actionCheck')
+})
 
 const openConfig = () => {
   emit('openConfig')
@@ -60,6 +99,44 @@ const closeSettings = () => {
   showSettings.value = false
 }
 
+onMounted(async () => {
+  if (window?.electronAPI?.appGetVersion) {
+    try {
+      version.value = await window.electronAPI.appGetVersion()
+    } catch (_) {}
+  }
+
+  if (window?.electronAPI?.updateGetStatus) {
+    try {
+      syncUpdateState(await window.electronAPI.updateGetStatus())
+    } catch (_) {}
+  }
+
+  if (window?.electronAPI?.onUpdateStatus) {
+    unsubscribeUpdate = window.electronAPI.onUpdateStatus(syncUpdateState)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (unsubscribeUpdate) {
+    unsubscribeUpdate()
+    unsubscribeUpdate = null
+  }
+})
+
+
+const handleUpdateAction = () => {
+  if (updateActionDisabled.value) return
+  if (updateStatus.value === 'downloaded') {
+    window?.electronAPI?.updateQuitAndInstall?.()
+    return
+  }
+  window?.electronAPI?.updateCheck?.()
+}
+
+const syncUpdateState = (payload) => {
+  if (payload && typeof payload === 'object') updateState.value = payload
+}
 
 </script>
 
@@ -144,6 +221,23 @@ const closeSettings = () => {
                 <span v-if="locale === 'en'" class="check" aria-hidden="true">OK</span>
               </button>
             </div>
+
+            <div class="section-label section-label--tight">{{ t('updates.title') }}</div>
+            <div class="update-card">
+              <div class="update-row">
+                <span class="version-tag">{{ versionLabel }}</span>
+                <button
+                  class="update-chip"
+                  :class="updateChipClass"
+                  :title="updateTitle"
+                  :disabled="updateActionDisabled"
+                  @click="handleUpdateAction"
+                >
+                  {{ updateLabel }}
+                </button>
+              </div>
+              <div v-if="updateStatus === 'error' && updateState.error" class="update-hint">{{ updateState.error }}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -203,6 +297,90 @@ const closeSettings = () => {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.version-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.update-card {
+  background: var(--surface-hover);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.update-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transition: all 0.2s ease;
+}
+
+.update-chip:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.update-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.update-chip--latest {
+  background: rgba(74, 222, 128, 0.12);
+  border-color: rgba(74, 222, 128, 0.35);
+  color: #86efac;
+}
+
+.update-chip--available {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #93c5fd;
+}
+
+.update-chip--downloading {
+  background: rgba(250, 204, 21, 0.18);
+  border-color: rgba(250, 204, 21, 0.4);
+  color: #fde047;
+}
+
+.update-chip--error {
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fecaca;
+}
+
+.update-chip--disabled {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
 }
 
 .menu-btn {
@@ -348,6 +526,11 @@ const closeSettings = () => {
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.55);
   margin-bottom: 10px;
+}
+
+.section-label--tight {
+  margin-top: 12px;
+  margin-bottom: 6px;
 }
 
 .lang-options {

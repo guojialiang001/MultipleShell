@@ -264,8 +264,11 @@ const copySelectionToClipboard = () => {
 onMounted(() => {
   terminal = new Terminal({
     cursorBlink: true,
+    cursorStyle: 'underline',
+    cursorInactiveStyle: 'none',
     fontSize: 14,
     fontFamily: 'JetBrains Mono, Consolas, "Courier New", monospace',
+    rendererType: 'dom',
     scrollback: 1000,
     // 完全禁用所有可能导致输入的选项
     rightClickSelectsWord: false,
@@ -304,6 +307,7 @@ onMounted(() => {
   terminal.loadAddon(fitAddon)
   terminal.open(terminalRef.value)
   fitAddon.fit()
+  if (props.isActive) terminal.focus()
 
   terminal.attachCustomKeyEventHandler((e) => {
     if (!e || !e.ctrlKey || e.altKey || e.metaKey) return true
@@ -619,8 +623,12 @@ const handleResize = () => {
 }
 
 watch(() => props.isActive, (active) => {
+  if (!terminal) return
   if (active) {
+    terminal.focus()
     setTimeout(() => handleResize(), 100)
+  } else {
+    terminal.blur()
   }
 })
 
@@ -682,5 +690,44 @@ onUnmounted(() => {
 .terminal-container {
   width: 100%;
   height: 100%;
+  position: relative;
+}
+
+.terminal-container :deep(.xterm) {
+  height: 100%;
+}
+
+.terminal-container :deep(.xterm-viewport) {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-active) transparent;
+}
+
+.terminal-container :deep(.xterm .xterm-cursor-blink) {
+  animation-duration: 1.8s !important;
+}
+
+.terminal-container :deep(.xterm-helper-textarea) {
+  opacity: 0 !important;
+  caret-color: transparent !important;
+}
+
+.terminal-container :deep(.xterm-viewport::-webkit-scrollbar) {
+  width: 10px;
+  height: 10px;
+}
+
+.terminal-container :deep(.xterm-viewport::-webkit-scrollbar-track) {
+  background: transparent;
+}
+
+.terminal-container :deep(.xterm-viewport::-webkit-scrollbar-thumb) {
+  background: var(--surface-active);
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--bg-color);
+}
+
+.terminal-container :deep(.xterm-viewport::-webkit-scrollbar-thumb:hover) {
+  background: var(--text-secondary);
 }
 </style>

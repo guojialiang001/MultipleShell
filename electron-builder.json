@@ -19,6 +19,8 @@
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
-    "warningsAsErrors": false
+    "warningsAsErrors": false,
+    "include": "build/installer.nsh"
   }
 }
+

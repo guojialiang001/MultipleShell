@@ -8,6 +8,20 @@ export default {
     manageTemplates: 'Manage templates',
     language: 'Language'
   },
+  updates: {
+    title: 'Updates',
+    check: 'Check updates',
+    checking: 'Checking...',
+    available: 'Update available',
+    availableWithVersion: 'Update {version}',
+    downloading: 'Downloading {progress}%',
+    downloaded: 'Restart to update',
+    latest: 'Latest',
+    error: 'Update failed',
+    disabled: 'Updates off',
+    actionCheck: 'Check for updates',
+    actionRestart: 'Restart to install update'
+  },
   language: {
     en: 'English',
     zhCN: 'Chinese (Simplified)'

@@ -8,6 +8,20 @@ export default {
     manageTemplates: '管理配置',
     language: '语言'
   },
+  updates: {
+    title: '\u66f4\u65b0',
+    check: '\u68c0\u67e5\u66f4\u65b0',
+    checking: '\u68c0\u67e5\u4e2d...',
+    available: '\u53d1\u73b0\u66f4\u65b0',
+    availableWithVersion: '\u53d1\u73b0\u65b0\u7248\u672c {version}',
+    downloading: '\u4e0b\u8f7d\u4e2d {progress}%',
+    downloaded: '\u91cd\u542f\u66f4\u65b0',
+    latest: '\u5df2\u662f\u6700\u65b0',
+    error: '\u66f4\u65b0\u5931\u8d25',
+    disabled: '\u66f4\u65b0\u672a\u542f\u7528',
+    actionCheck: '\u68c0\u67e5\u66f4\u65b0',
+    actionRestart: '\u91cd\u542f\u5b89\u88c5\u66f4\u65b0'
+  },
   language: {
     en: 'English',
     zhCN: '中文'
