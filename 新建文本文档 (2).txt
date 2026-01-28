@@ -1,0 +1,115 @@
+【已加大量卸载检测日志（用于排查“检测不到正在运行的程序”）】
+我已经在 `build/installer.nsh` 里把卸载/升级相关的“进程检测”逻辑做了增强，并加入了大量日志：
+
+- 日志文件位置：`%TEMP%\\${PRODUCT_FILENAME}-uninstall-debug.log`
+  - 本项目默认会是：`%TEMP%\\MultipleShell-uninstall-debug.log`
+- 关键点：必须“重新打包 + 重新安装”后再测试卸载（否则你运行的还是旧卸载程序）
+- 你只要把这个 log 发我，就能快速定位：到底是宏没生效、变量值不对、tasklist 执行失败、还是权限/会话隔离等问题
+
+建议你重点看 log 里的这些字段：
+
+- `=== customUnInit (un.onInit) ===` 是否出现（证明卸载最早阶段的钩子确实执行了）
+- `APP_EXECUTABLE_FILENAME` / `INSTDIR` / `env.USERNAME` 是否符合预期
+- `nsProcess::FindProcess rc: ...`（0 表示找到了进程）
+- `tasklist|find rc: ...`（0 表示找到了进程）
+- log 里追加的 `tasklist /FI ...` 输出里是否有目标 exe
+
+下面是原本的系统化排查步骤（仍然有效）：
+
+这是一个非常关键的问题。如果卸载时依然检测不到正在运行的程序，说明检测逻辑在真实环境中仍然存在漏洞。我们需要系统性地诊断。请按以下步骤排查：
+
+第一步：核心诊断 - 验证检测命令本身
+在你的电脑上手动运行脚本中使用的检测命令，这是最直接的验证方法。
+
+确保你的应用正在运行（主窗口或托盘图标）。
+
+以管理员身份打开“命令提示符”（CMD）或 PowerShell。
+
+执行以下命令（请将 YourApp.exe 替换为你的 ${APP_EXECUTABLE_FILENAME} 的实际值，例如 myapp.exe）：
+
+cmd
+tasklist /FI "IMAGENAME eq YourApp.exe" /NH
+预期结果（进程在运行）：屏幕上会显示一行进程信息，如 YourApp.exe 1234 Console 1 45,632 K。
+
+预期结果（进程未运行）：显示 信息: 没有运行的进程匹配指定标准。
+
+接着执行脚本中的管道命令：
+
+cmd
+tasklist /FI "IMAGENAME eq YourApp.exe" /NH | find /I "YourApp.exe"
+预期结果（进程在运行）：屏幕上会显示进程信息行（与上一步相同）。
+
+预期结果（进程未运行）：命令窗口直接返回，无任何输出，且命令行提示符会显示错误代码 1（可以通过在CMD中运行 echo %errorlevel% 或在 PowerShell 中运行 $LASTEXITCODE 来查看）。
+
+这一步的目的：直接确认 tasklist 命令在你的系统上、对你的应用是否有效。如果这一步都检测不到，那么脚本肯定也检测不到。
+
+第二步：脚本内诊断 - 添加详细日志
+在 customUnInit 宏的检测代码前后添加日志输出，查看脚本“眼中”看到的世界。
+
+在你的 check_running: 标签后，立即添加：
+
+nsis
+DetailPrint "=== 开始进程检测 ==="
+DetailPrint "检测的可执行文件名: ${APP_EXECUTABLE_FILENAME}"
+在执行 nsExec::Exec 命令后，添加：
+
+nsis
+DetailPrint "命令返回码: $R0"
+${If} $R0 == 0
+    DetailPrint "状态: 检测到进程"
+${ElseIf} $R0 == 1
+    DetailPrint "状态: 未检测到进程"
+${Else}
+    DetailPrint "状态: 命令执行出错 (错误码: $R0)"
+${EndIf}
+重新编译并运行卸载程序，观察日志窗口（如果静默，可将日志写入文件）。这会告诉我们检测命令在脚本上下文中的真实返回值。
+
+第三步：环境与变量诊断 - 检查关键变量
+在脚本顶部（或检测前）加入以下代码，检查变量值是否正确传递：
+
+nsis
+DetailPrint "PRODUCT_NAME: ${PRODUCT_NAME}"
+DetailPrint "APP_EXECUTABLE_FILENAME: ${APP_EXECUTABLE_FILENAME}"
+MessageBox MB_OK "调试: 正在查找进程 ${APP_EXECUTABLE_FILENAME}"
+这可以排除因为打包配置问题导致 ${APP_EXECUTABLE_FILENAME} 变量为空或错误。
+
+第四步：创建一个最小化测试脚本
+为了排除其他宏的干扰，创建一个全新的 .nsi 文件，只包含最精简的进程检测逻辑：
+
+nsis
+Outfile "TestDetector.exe"
+Name "Test"
+
+Section
+    ; 在这里硬编码你的应用名
+    StrCpy $0 "YourApp.exe"
+    DetailPrint "正在检测 $0..."
+
+    nsExec::Exec `tasklist /FI "IMAGENAME eq $0" /NH | find /I "$0"`
+    Pop $1
+    DetailPrint "返回码: $1"
+
+    ${If} $1 == 0
+        MessageBox MB_OK "SUCCESS: 检测到进程 $0"
+    ${Else}
+        MessageBox MB_OK "FAIL: 未检测到进程 $0 (错误码: $1)"
+    ${EndIf}
+SectionEnd
+编译并运行这个测试程序。它能帮你彻底隔离问题。
+
+可能的原因汇总与解决方案
+可能性	原因分析	解决方案
+1. 进程名不匹配	实际运行的进程名（如 MyApp.exe）与 ${APP_EXECUTABLE_FILENAME} 变量（如 MyApp.exe）大小写不一致或有后缀差异。	使用第一步的 tasklist 命令确认精确的进程名。确保变量与其完全一致。
+2. 权限或会话隔离	应用可能以SYSTEM、服务或在不同用户会话（如远程桌面）中运行，导致普通权限的 tasklist 无法枚举。	在管理员权限下运行卸载程序进行测试。考虑在检测命令前添加 DetailPrint "当前用户: $USERNAME"。
+3. 应用多进程	你的Electron应用可能由多个进程组成（主进程、渲染进程、子进程），而主进程名可能与可执行文件名不完全相同。	尝试检测所有相关进程：tasklist | find /I "YourApp"（使用部分名称）。可能需要检查进程树。
+4. 脚本逻辑分支	错误地进入了 ${if} $R0 == 2 这个“回退检测”分支，而该分支的逻辑可能有误。	仔细检查第二步的日志，看是否进入了这个分支。简化逻辑，暂时移除回退分支，只保留核心检测。
+行动计划建议
+立即执行【第一步】，这是最快、最直接的验证方法。如果手动命令就检测不到，那么问题出在进程本身或环境上。
+
+如果手动命令能检测到，但脚本检测不到，立即执行【第二步】，添加日志，这是定位脚本内问题的关键。
+
+检查你的应用是否在安装后或运行时修改了进程名（例如，有些应用启动器会生成带参数或不同名称的子进程）。
+
+请你先执行第一步的手动命令测试，并告诉我结果。有了这个基础信息，我们就能立即定位到问题的大致方向。
+
+如果愿意，你也可以将第二步的详细日志截图发给我，我可以帮你分析具体的返回值。

@@ -1,0 +1,182 @@
+ 主要问题：
+1. CSV格式导致的检测失败 ⚠️
+nsis
+nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /FO csv | %SYSTEMROOT%\System32\find.exe /I "${APP_EXECUTABLE_FILENAME}" >nul`
+问题：/FO csv输出格式如："myapp.exe","1234","Session","1","45,632 K"
+而find /I "${APP_EXECUTABLE_FILENAME}"查找不带引号的名称，总是找不到！
+
+修复：
+
+nsis
+; 方法1：去掉/FO csv，用默认格式
+nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" | %SYSTEMROOT%\System32\find.exe /I "${APP_EXECUTABLE_FILENAME}" >nul`
+
+; 方法2：保持CSV但要正确搜索（复杂，不推荐）
+2. 无限重试循环 ⚠️
+nsis
+MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+  "${PRODUCT_NAME} is currently running.$\r$\n$\r$\n..." \
+  /SD IDCANCEL IDRETRY check_running
+问题：如果用户一直点"Retry"，会无限循环。没有重试次数限制。
+
+修复：
+
+nsis
+StrCpy $R9 0  ; 重试计数器
+check_running:
+  IntOp $R9 $R9 + 1
+  ${If} $R9 > 3
+    MessageBox MB_OK|MB_ICONSTOP "多次检测失败，请手动关闭应用后重试"
+    Abort
+  ${EndIf}
+  ; ... 检测逻辑
+3. 逻辑死锁 ⚠️
+在customCheckAppRunning中：
+
+nsis
+MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(appRunning)" /SD IDOK IDOK doStopProcess
+Quit  ; ← 这行永远不会执行到，因为IDOK跳转到doStopProcess了
+4. 静默模式处理不当 ⚠️
+nsis
+${if} $R0 == 0
+  ${If} ${Silent}
+    Goto doStopProcess  ; 静默模式直接杀进程
+  ${EndIf}
+问题：静默安装时直接杀进程，没有给用户保存数据的机会。
+
+建议：要么允许静默杀进程，要么在静默时直接失败。
+
+5. 进程关闭逻辑有缺陷 ⚠️
+nsis
+loop:
+  IntOp $R1 $R1 + 1
+  ; ... 检测进程
+  ${if} $R0 == 0
+    ${if} $R1 < 3
+      Sleep 1000
+      Goto loop  ; ← 如果进程还在，只是sleep后重试，没有尝试再次关闭！
+    ${endif}
+问题：循环只是检测，没有尝试再次关闭进程。
+
+修复：
+
+nsis
+loop:
+  IntOp $R1 $R1 + 1
+  ; 再次尝试关闭
+  nsExec::Exec `taskkill /im "${APP_EXECUTABLE_FILENAME}" /T >nul`
+  Sleep 1000
+  ; ... 检测是否成功
+6. 缺少错误处理 ⚠️
+taskkill可能失败，但没有检查返回值：
+
+nsis
+nsExec::Exec `taskkill /f /im "${APP_EXECUTABLE_FILENAME}" /T >nul`
+; ← 这里应该检查$R0，taskkill失败可能需要特殊处理
+建议的完整修复版本：
+nsis
+!macro customCheckAppRunning
+  ; 使用tasklist的返回值判断，简化命令
+  nsExec::Exec `tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /NH`
+  Pop $R0
+  
+  ${if} $R0 == 0  ; 找到进程返回0
+    ${If} ${Silent}
+      DetailPrint "静默模式：尝试关闭运行的应用..."
+      Goto doStopProcess
+    ${EndIf}
+    
+    MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
+      "${PRODUCT_NAME} 正在运行。$\r$\n请先关闭应用再继续安装。" \
+      /SD IDOK IDOK doStopProcess
+    Quit  ; 用户点了Cancel或关闭对话框
+    
+    doStopProcess:
+    DetailPrint `正在关闭 "${PRODUCT_NAME}"...`
+    
+    ; 第一次尝试优雅关闭
+    nsExec::Exec `taskkill /im "${APP_EXECUTABLE_FILENAME}" /T`
+    Pop $R0
+    Sleep 1000
+    
+    StrCpy $R1 0
+    loop:
+      ; 检查是否还在运行
+      nsExec::Exec `tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /NH`
+      Pop $R0
+      
+      ${if} $R0 == 0
+        IntOp $R1 $R1 + 1
+        ${if} $R1 < 3
+          ; 重试关闭
+          nsExec::Exec `taskkill /im "${APP_EXECUTABLE_FILENAME}" /T`
+          Sleep 1000
+          Goto loop
+        ${else}
+          ; 强制关闭
+          DetailPrint "强制关闭应用..."
+          nsExec::Exec `taskkill /f /im "${APP_EXECUTABLE_FILENAME}" /T`
+          Sleep 500
+          
+          ; 最终检查
+          nsExec::Exec `tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /NH`
+          Pop $R0
+          ${if} $R0 == 0
+            ${IfNot} ${Silent}
+              MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+                "无法关闭 ${PRODUCT_NAME}。$\r$\n请手动关闭后重试。" \
+                /SD IDCANCEL IDRETRY doStopProcess
+            ${EndIf}
+            Quit
+          ${endif}
+        ${endif}
+      ${endif}
+  ${endif}
+!macroend
+
+!macro customUnInit
+  StrCpy $R9 0
+  
+  check_running:
+    IntOp $R9 $R9 + 1
+    ${If} $R9 > 3
+      MessageBox MB_OK|MB_ICONSTOP \
+        "多次检测到应用仍在运行。$\r$\n请手动关闭 ${PRODUCT_NAME} 后重新运行卸载程序。"
+      Abort
+    ${EndIf}
+    
+    nsExec::Exec `tasklist /FI "IMAGENAME eq ${APP_EXECUTABLE_FILENAME}" /NH`
+    Pop $R0
+    
+    ${if} $R0 == 0
+      ${If} ${Silent}
+        Abort
+      ${EndIf}
+      
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+        "${PRODUCT_NAME} 正在运行。$\r$\n请完全关闭应用（包括系统托盘图标）。$\r$\n$\r$\n点击重试再次检查（尝试 $R9/3），或取消退出。" \
+        /SD IDCANCEL IDRETRY check_running
+      Abort
+    ${endif}
+    
+  ; 确认卸载
+  ${IfNot} ${Silent}
+    MessageBox MB_YESNO|MB_ICONQUESTION \
+      "确定要卸载 ${PRODUCT_NAME} 吗？" \
+      IDYES proceed
+    Abort
+    proceed:
+  ${EndIf}
+!macroend
+核心问题排序：
+CSV格式不匹配 - 导致检测总是失败（最重要）
+
+无限重试循环 - 用户体验问题
+
+进程关闭逻辑缺陷 - 只是检测，没有重试关闭
+
+逻辑死锁 - Quit永远执行不到
+
+静默模式处理 - 可能需要更细致的策略
+
+缺少错误检查 - 程序健壮性问题

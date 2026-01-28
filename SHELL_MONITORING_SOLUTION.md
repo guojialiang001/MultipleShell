@@ -2,7 +2,23 @@
 
 ## 概述
 
-本方案提供一个缩略图监控模式，用于实时监测三种 Shell 类型（Claude Code、Codex、OpenCode）的执行完成状态。
+本方案为 MultipleShell 增加一个“缩略卡片（Thumbnail）监控面板”，用于实时观察三种配置类型（`claude-code` / `codex` / `opencode`）会话的运行状态、就绪/完成信号与异常情况。
+
+说明：这里的“缩略图”并不是截图终端画面，而是状态摘要卡片（图标 + 时长 + 输出活跃度 + 最后一行/错误提示）。这样可以：
+- 避免渲染端高频截图导致卡顿
+- 避免把终端中的敏感信息（token/路径/私有代码）以图片形式持久化
+
+### 目标（我们要得到什么）
+
+- 同屏快速判断：哪个会话在跑、哪个已就绪/完成、哪个报错、哪个疑似卡住
+- 多会话低开销：只保留少量统计与最后 N 行文本，避免占用大量内存
+- 可配置规则：不同工具/版本输出差异较大，完成/错误规则必须可调整
+- 与现有架构契合：复用 `terminal:data` / `terminal:exit` / `write-terminal` 事件链路
+
+### 非目标（本方案不解决）
+
+- 读取 Claude/Codex/OpenCode 的“内部进度百分比”
+- 语义级任务是否“真的做完”：只能基于进程事件与输出做启发式判断
 
 ## 一、监控可行性分析
 
@@ -41,10 +57,10 @@
 
 ### ✅ 实现前提与边界
 
-- PTY 层能够提供每个会话的 stdout/stderr、退出码与会话元数据
-- 会话创建时可拿到 configType，用于选择对应的模式匹配规则
-- 输出流能实时捕获（不只依赖落盘日志）
-- UI 允许节流/批量更新，避免高频刷新导致卡顿
+- PTY 层能够提供每个会话的 `onData` / `onExit` / `pid` 等元数据（node-pty 的 data 流通常是混合流，可按统一输出处理）
+- 会话创建时可拿到 `config.type`（本项目内置：`claude-code` / `codex` / `opencode`），用于选择对应规则
+- 能在 `write-terminal`（用户输入）处打点：用于更可靠地判断“这一轮任务是否结束/回到提示符”
+- UI 侧支持节流/批量更新，避免高频刷新导致卡顿
 
 ## 二、监控架构设计
 
@@ -88,65 +104,116 @@
 | 未启动 | ⚪ | 灰色 | 会话未创建 |
 | 启动中 | 🔵 | 蓝色 | 进程已创建，等待首次输出 |
 | 运行中 | 🟢 | 绿色 | 进程活跃，有输出流动 |
-| 空闲 | 🟡 | 黄色 | 进程存在，但 30 秒无输出 |
-| 完成 | ✅ | 绿色 | 检测到完成标识 |
-| 错误 | 🔴 | 红色 | 进程异常退出或错误输出 |
-| 已停止 | ⚫ | 黑色 | 进程正常退出 |
+| 空闲 | 🟡 | 黄色 | 检测到“提示符返回/等待输入”（推荐），或超过 `idleMs` 无输出（兜底） |
+| 卡住 | 🟠 | 橙色 | 超过 `stuckMs` 无输出且未检测到提示符（疑似卡死/无响应） |
+| 完成 | ✅ | 绿色 | 检测到明确完成标识（可配置）；或退出码为 0 且无错误信号（可选） |
+| 错误 | 🔴 | 红色 | 退出码非 0；或命中严重错误标识（可配置） |
+| 已停止 | ⚫ | 黑色 | 进程退出/被终止（退出码 0 但未命中完成标识时可归为 stopped） |
 
-### 3.2 三大类型的完成标识
+补充约定（建议）：
+- `completed`/`error`/`stopped` 为“粘性状态”，直到下一次用户输入（新一轮任务）才被重置为 `running`。
+- 默认只在状态变化或节流窗口到期时推送 UI 更新，避免每个 output chunk 都触发渲染刷新。
 
-#### Claude Code
+### 3.2 三大类型的规则体系（提示符 / 完成 / 错误）
+
+建议把规则拆分为三类（均可配置），并基于“新增行”做增量匹配（不要每次扫描全缓冲）：
+- `promptPatterns`：提示符/等待输入（优先级高于纯超时的 idle 判断）
+- `completionPatterns`：明确成功完成（用于把 idle 升级为 completed）
+- `errorPatterns`：明确失败/异常（可分级：soft/hard）
+
+规则强烈建议做成可配置文件（例如 `configs/monitor-rules.json`），并内置默认规则作为兜底。原因是：不同工具版本、不同语言/地区、不同 prompt 主题会导致输出差异非常大。
+
+提示符识别增强（可选但推荐）：
+- PowerShell 的默认提示符格式并不稳定（用户可能使用 oh-my-posh、自定义 prompt 等）
+- 推荐在会话启动时注入一个不易冲突的 prompt 标记（例如 `__MPS_PROMPT__`），让 monitor 能稳定识别“回到提示符”
+
+#### Claude Code (`claude-code`) 规则示例
 ```javascript
-completionPatterns: [
-  /Task completed successfully/i,
-  /✓ Done/i,
-  /All tests passed/i,
-  /Build succeeded/i,
-  // 检测 PowerShell 提示符返回（无活动状态）
-  /PS\s+[A-Z]:\\/
-]
+{
+  promptPatterns: [
+    // PowerShell 默认提示符（兜底）
+    /(?:^|\n)PS [^>\r\n]+>\s*$/m,
+    // 可选：自定义提示符注入（推荐）
+    /(?:^|\n)__MPS_PROMPT__\b.*$/m
+  ],
+  completionPatterns: [
+    /\bTask completed\b/i,
+    /\bAll tests passed\b/i,
+    /\bBuild succeeded\b/i,
+    /✓\s*(?:Done|Completed)\b/i
+  ],
+  errorPatterns: [
+    /\bUnhandled (?:exception|error)\b/i,
+    /\bTraceback \(most recent call last\)\b/i,
+    /\bpanic:\b/i
+  ]
+}
 ```
 
-#### Codex
+#### Codex (`codex`) 规则示例
 ```javascript
-completionPatterns: [
-  /Codex session ended/i,
-  /Operation completed/i,
-  /✓/,
-  // 检测命令执行完成
-  /Exit code:\s*0/i
-]
+{
+  promptPatterns: [
+    /(?:^|\n)PS [^>\r\n]+>\s*$/m,
+    /(?:^|\n)__MPS_PROMPT__\b.*$/m,
+    /(?:^|\n)codex>\s*$/mi
+  ],
+  completionPatterns: [
+    /\bOperation completed\b/i,
+    /\bAll tests passed\b/i
+  ],
+  errorPatterns: [
+    /\bOpenAI\b.*\b(unauthorized|forbidden)\b/i
+  ]
+}
 ```
 
-#### OpenCode
+#### OpenCode (`opencode`) 规则示例
 ```javascript
-completionPatterns: [
-  /OpenCode task finished/i,
-  /Successfully completed/i,
-  /✓ All operations done/i
-]
+{
+  promptPatterns: [
+    /(?:^|\n)PS [^>\r\n]+>\s*$/m,
+    /(?:^|\n)__MPS_PROMPT__\b.*$/m,
+    /(?:^|\n)opencode>\s*$/mi
+  ],
+  completionPatterns: [
+    /\bSuccessfully completed\b/i,
+    /\bAll operations done\b/i
+  ],
+  errorPatterns: [
+    /\bpermission\b.*\bdenied\b/i
+  ]
+}
 ```
 
-### 3.3 错误标识
+### 3.3 错误标识（通用兜底 + 排除项）
 
 ```javascript
-errorPatterns: [
-  /error:/i,
-  /failed/i,
-  /exception/i,
-  /fatal/i,
-  /cannot find/i,
-  /permission denied/i,
-  /timeout/i,
-  /Exit code:\s*[1-9]/i  // 非零退出码
+// 注意：尽量加上边界，避免把“0 failed / no error”这类成功信息误判为失败。
+ERROR_PATTERNS: [
+  /\bfatal\b/i,
+  /\bpanic\b/i,
+  /\b(unhandled|uncaught)\b.*\b(exception|error)\b/i,
+  /\bexception\b/i,
+  /\berror\b/i,
+  /\bpermission denied\b/i,
+  /\btimeout\b/i,
+  /\bExit code:\s*[1-9]\d*\b/i
+],
+ERROR_EXCLUDE_PATTERNS: [
+  /\b0 failed\b/i,
+  /\bno errors?\b/i,
+  /\berrors?:\s*0\b/i
 ]
 ```
 ### 3.4 判定策略优先级（建议）
 
 - 退出码优先：非 0 直接判定错误；0 进入完成/停止判定
-- 明确完成标识优先于空闲判断
-- 空闲只代表“暂无输出”，不等同于完成
-- 错误模式匹配作为加权信号，避免误报（stderr 不必然等于失败）
+- 严重错误标识（hard error）可直接置为 `error`（建议分级）
+- 明确完成标识优先于空闲判断（将 idle 升级为 completed）
+- 提示符返回优先于“纯超时”空闲判断（更快、更稳定）
+- 空闲只代表“暂无输出/等待输入”，不等同于“成功完成”
+- 用户输入是新一轮任务起点：收到 `write-terminal` 后应重置粘性状态（completed/error）回到 running
 
 
 ## 四、实现方案
@@ -156,14 +223,16 @@ errorPatterns: [
 ```
 src/
 ├── main/
-│   └── shell-monitor.js          # 新增：Shell 监控服务
+│   ├── shell-monitor.js          # 新增：Shell 监控服务（状态机 + 规则引擎）
+│   └── shell-monitor-rules.js    # 新增：内置默认规则（可被用户配置覆盖）
+├── preload/
+│   └── index.js                  # 追加：monitor IPC API
 ├── renderer/
 │   └── components/
 │       ├── MonitorPanel.vue      # 新增：缩略图监控面板
 │       └── SessionThumbnail.vue  # 新增：单个会话缩略图
-└── shared/
-    └── monitor-constants.js      # 新增：监控常量定义
 ```
+可选（推荐）：`configs/monitor-rules.json`（用户可编辑的规则覆盖文件）。
 
 ### 4.2 核心代码实现
 
@@ -187,124 +256,236 @@ normalize(data):
 #### 4.2.1 Shell 监控服务 (`shell-monitor.js`)
 
 ```javascript
-class ShellMonitor {
-  constructor() {
-    this.sessions = new Map(); // sessionId -> MonitorState
-    this.outputBuffers = new Map(); // sessionId -> 最近输出缓冲
+const { EventEmitter } = require('events')
+const { RULES_BY_TYPE, ERROR_PATTERNS, ERROR_EXCLUDE_PATTERNS } = require('./shell-monitor-rules')
+
+const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g
+const stripAnsi = (s) => String(s || '').replace(ANSI_RE, '')
+
+class ShellMonitor extends EventEmitter {
+  constructor(opts = {}) {
+    super()
+    this.sessions = new Map() // sessionId -> state
+    this.options = {
+      idleMs: 30_000,
+      stuckMs: 10 * 60_000,
+      maxLastLines: 20,
+      updateThrottleMs: 250,
+      ...opts
+    }
   }
 
-  // 注册会话监控
-  registerSession(sessionId, configType) {
+  isFinal(status) {
+    return status === 'stopped' || status === 'error'
+  }
+
+  registerSession(sessionId, configType, meta = {}) {
     this.sessions.set(sessionId, {
       sessionId,
       configType,
       status: 'starting',
       startTime: Date.now(),
+      endTime: null,
+      lastInputTime: null,
+      lastOutputTime: null,
       lastActivityTime: Date.now(),
       outputLineCount: 0,
       errorCount: 0,
       completionDetected: false,
-      processExitCode: null
-    });
+      promptDetected: false,
+      processExitCode: null,
+      lastLine: '',
+      lastErrorLine: '',
+      lastLines: [],
+      remainder: '',
+      _dirty: true,
+      _notifyTimer: null,
+      ...meta
+    })
+    this.queueNotify(sessionId)
   }
 
-  // 处理输出数据
+  unregisterSession(sessionId) {
+    this.sessions.delete(sessionId)
+    this.emit('update', { sessionId, state: null })
+  }
+
+  onUserInput(sessionId, data) {
+    const state = this.sessions.get(sessionId)
+    if (!state || this.isFinal(state.status)) return
+
+    state.lastInputTime = Date.now()
+    state.lastActivityTime = state.lastInputTime
+
+    // 新一轮任务：重置粘性标记
+    state.completionDetected = false
+    state.promptDetected = false
+
+    if (state.status !== 'starting') state.status = 'running'
+    state._dirty = true
+    this.queueNotify(sessionId)
+  }
+
+  normalizeLines(state, data) {
+    const text = stripAnsi(data).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const merged = state.remainder + text
+    const parts = merged.split('\n')
+    state.remainder = parts.pop() || ''
+    return parts.filter(Boolean)
+  }
+
+  pushLastLines(state, lines) {
+    for (const line of lines) {
+      const trimmed = String(line).trimEnd()
+      if (!trimmed) continue
+      state.lastLines.push(trimmed)
+      if (state.lastLines.length > this.options.maxLastLines) {
+        state.lastLines.splice(0, state.lastLines.length - this.options.maxLastLines)
+      }
+      state.lastLine = trimmed
+    }
+  }
+
+  matchAny(lines, patterns) {
+    if (!Array.isArray(patterns) || patterns.length === 0) return false
+    return lines.some((line) => patterns.some((re) => re.test(line)))
+  }
+
   onData(sessionId, data) {
-    const state = this.sessions.get(sessionId);
-    if (!state) return;
+    const state = this.sessions.get(sessionId)
+    if (!state || this.isFinal(state.status)) return
 
-    // 更新活动时间
-    state.lastActivityTime = Date.now();
-    state.outputLineCount += data.split('\n').length;
+    const now = Date.now()
+    state.lastOutputTime = now
+    state.lastActivityTime = now
 
-    // 缓冲最近 1000 行输出用于模式匹配
-    let buffer = this.outputBuffers.get(sessionId) || '';
-    buffer += data;
-    buffer = buffer.split('\n').slice(-1000).join('\n');
-    this.outputBuffers.set(sessionId, buffer);
-
-    // 检测完成标识
-    if (this.detectCompletion(state.configType, buffer)) {
-      state.status = 'completed';
-      state.completionDetected = true;
+    // 任何新输出都应把 idle/stuck/completed 拉回 running（除非已经 final）
+    if (state.status === 'idle' || state.status === 'stuck' || state.status === 'completed') {
+      state.status = 'running'
+    } else if (state.status === 'starting') {
+      state.status = 'running'
     }
 
-    // 检测错误
-    if (this.detectError(buffer)) {
-      state.errorCount++;
-      if (state.errorCount > 3) {
-        state.status = 'error';
-      }
+    const lines = this.normalizeLines(state, data)
+    if (lines.length === 0) return
+
+    state.outputLineCount += lines.length
+    this.pushLastLines(state, lines)
+
+    const rules = RULES_BY_TYPE[state.configType] || {}
+    const promptHit = this.matchAny(lines, rules.promptPatterns)
+    const completionHit = this.matchAny(lines, rules.completionPatterns)
+
+    // 通用错误兜底：先排除再匹配
+    const excluded = this.matchAny(lines, ERROR_EXCLUDE_PATTERNS)
+    const toolErrorHit = this.matchAny(lines, rules.errorPatterns)
+    const fallbackErrorHit = !excluded && this.matchAny(lines, ERROR_PATTERNS)
+
+    if (toolErrorHit || fallbackErrorHit) {
+      state.errorCount += 1
+      state.lastErrorLine = state.lastLine
+      // 可按需要：达到阈值/或命中 hard error 才置为 error
+      if (state.errorCount >= 3) state.status = 'error'
     }
 
-    // 更新运行状态
-    if (state.status === 'starting') {
-      state.status = 'running';
+    if (completionHit) state.completionDetected = true
+
+    if (promptHit) {
+      state.promptDetected = true
+      state.status = state.completionDetected ? 'completed' : 'idle'
     }
 
-    // 通知渲染进程
-    this.notifyUpdate(sessionId);
+    state._dirty = true
+    this.queueNotify(sessionId)
   }
 
-  // 处理进程退出
   onExit(sessionId, exitCode) {
-    const state = this.sessions.get(sessionId);
-    if (!state) return;
+    const state = this.sessions.get(sessionId)
+    if (!state) return
 
-    state.processExitCode = exitCode;
+    state.processExitCode = exitCode
+    state.endTime = Date.now()
+    state.status = exitCode === 0 ? (state.completionDetected ? 'completed' : 'stopped') : 'error'
 
-    if (exitCode === 0) {
-      state.status = state.completionDetected ? 'completed' : 'stopped';
-    } else {
-      state.status = 'error';
-    }
-
-    this.notifyUpdate(sessionId);
+    state._dirty = true
+    this.queueNotify(sessionId, { immediate: true })
   }
 
-  // 检测完成模式
-  detectCompletion(configType, output) {
-    const patterns = COMPLETION_PATTERNS[configType] || [];
-    return patterns.some(pattern => pattern.test(output));
-  }
-
-  // 检测错误模式
-  detectError(output) {
-    return ERROR_PATTERNS.some(pattern => pattern.test(output));
-  }
-
-  // 检测空闲状态
-  checkIdleSessions() {
-    const now = Date.now();
+  // 周期性 tick：idle/stuck 判定（提示符优先，纯超时为兜底）
+  tick() {
+    const now = Date.now()
     for (const [sessionId, state] of this.sessions) {
-      if (state.status === 'running') {
-        const idleTime = now - state.lastActivityTime;
-        if (idleTime > 30000) { // 30 秒无活动
-          state.status = 'idle';
-          this.notifyUpdate(sessionId);
-        }
+      if (this.isFinal(state.status)) continue
+      if (state.status !== 'running' && state.status !== 'starting') continue
+
+      const last = state.lastOutputTime || state.lastActivityTime || state.startTime
+      const silentMs = now - last
+
+      if (silentMs >= this.options.stuckMs) {
+        state.status = 'stuck'
+        state._dirty = true
+        this.queueNotify(sessionId)
+        continue
+      }
+
+      if (silentMs >= this.options.idleMs) {
+        state.status = 'idle'
+        state._dirty = true
+        this.queueNotify(sessionId)
       }
     }
   }
 
-  // 通知渲染进程更新
-  notifyUpdate(sessionId) {
-    const state = this.sessions.get(sessionId);
-    if (state && global.mainWindow) {
-      global.mainWindow.webContents.send('monitor:update', {
-        sessionId,
-        state: { ...state }
-      });
-    }
+  queueNotify(sessionId, { immediate = false } = {}) {
+    const state = this.sessions.get(sessionId)
+    if (!state) return
+    if (state._notifyTimer) return
+
+    const delay = immediate ? 0 : this.options.updateThrottleMs
+    state._notifyTimer = setTimeout(() => {
+      state._notifyTimer = null
+      if (!state._dirty) return
+      state._dirty = false
+
+      // 对外只暴露渲染需要的字段（避免把 remainder/内部字段发出去）
+      const publicState = {
+        sessionId: state.sessionId,
+        configType: state.configType,
+        status: state.status,
+        startTime: state.startTime,
+        endTime: state.endTime,
+        lastActivityTime: state.lastActivityTime,
+        outputLineCount: state.outputLineCount,
+        errorCount: state.errorCount,
+        processExitCode: state.processExitCode,
+        lastLine: state.lastLine,
+        lastErrorLine: state.lastErrorLine,
+        lastLines: state.lastLines
+      }
+
+      this.emit('update', { sessionId, state: publicState })
+    }, delay)
   }
 
-  // 获取所有会话状态
   getAllStates() {
-    return Array.from(this.sessions.values());
+    return Array.from(this.sessions.values()).map((s) => ({
+      sessionId: s.sessionId,
+      configType: s.configType,
+      status: s.status,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      lastActivityTime: s.lastActivityTime,
+      outputLineCount: s.outputLineCount,
+      errorCount: s.errorCount,
+      processExitCode: s.processExitCode,
+      lastLine: s.lastLine,
+      lastErrorLine: s.lastErrorLine,
+      lastLines: s.lastLines
+    }))
   }
 }
 
-module.exports = new ShellMonitor();
+module.exports = new ShellMonitor()
 ```
 
 #### 4.2.2 监控面板组件 (`MonitorPanel.vue`)
@@ -332,60 +513,65 @@ module.exports = new ShellMonitor();
     <div v-if="!isCollapsed" class="stats">
       <span>运行中: {{ runningCount }}</span>
       <span>完成: {{ completedCount }}</span>
+      <span>卡住: {{ stuckCount }}</span>
       <span>错误: {{ errorCount }}</span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
-import SessionThumbnail from './SessionThumbnail.vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import SessionThumbnail from './SessionThumbnail.vue'
 
-const sessions = ref([]);
-const isCollapsed = ref(false);
+const emit = defineEmits(['focus'])
+
+const sessions = ref([])
+const isCollapsed = ref(false)
+let unsubscribe = null
 
 const runningCount = computed(() =>
   sessions.value.filter(s => s.status === 'running').length
-);
+)
 
 const completedCount = computed(() =>
   sessions.value.filter(s => s.status === 'completed').length
-);
+)
+
+const stuckCount = computed(() =>
+  sessions.value.filter(s => s.status === 'stuck').length
+)
 
 const errorCount = computed(() =>
   sessions.value.filter(s => s.status === 'error').length
-);
+)
 
 // 监听监控更新
 const handleMonitorUpdate = (event, { sessionId, state }) => {
-  const index = sessions.value.findIndex(s => s.sessionId === sessionId);
-  if (index >= 0) {
-    sessions.value[index] = state;
-  } else {
-    sessions.value.push(state);
-  }
-};
+  const index = sessions.value.findIndex(s => s.sessionId === sessionId)
+  if (index >= 0) sessions.value[index] = state
+  else sessions.value.push(state)
+}
 
-// 聚焦到指定会话
+// 聚焦到指定会话（建议：父组件接收到 focus 后直接设置 activeTabId）
 const focusSession = (sessionId) => {
-  window.electronAPI.focusSession(sessionId);
-};
+  emit('focus', sessionId)
+}
 
 const toggleCollapse = () => {
-  isCollapsed.value = !isCollapsed.value;
-};
+  isCollapsed.value = !isCollapsed.value
+}
 
 onMounted(() => {
-  window.electronAPI.on('monitor:update', handleMonitorUpdate);
-  // 请求初始状态
-  window.electronAPI.getMonitorStates().then(states => {
-    sessions.value = states;
-  });
-});
+  unsubscribe = window.electronAPI.onMonitorUpdate(handleMonitorUpdate)
+  window.electronAPI.monitorGetStates().then(states => {
+    sessions.value = Array.isArray(states) ? states : []
+  })
+})
 
 onUnmounted(() => {
-  window.electronAPI.off('monitor:update', handleMonitorUpdate);
-});
+  if (typeof unsubscribe === 'function') unsubscribe()
+  unsubscribe = null
+})
 </script>
 
 <style scoped>
@@ -394,8 +580,8 @@ onUnmounted(() => {
   bottom: 0;
   right: 0;
   width: 400px;
-  background: rgba(30, 30, 30, 0.95);
-  border: 1px solid #444;
+  background: rgba(20, 20, 20, 0.92);
+  border: 1px solid var(--border-color, #444);
   border-radius: 8px 8px 0 0;
   padding: 10px;
   z-index: 1000;
@@ -427,7 +613,7 @@ onUnmounted(() => {
   justify-content: space-around;
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid #444;
+  border-top: 1px solid var(--border-color, #444);
   font-size: 12px;
 }
 </style>
@@ -459,6 +645,10 @@ onUnmounted(() => {
         <span>{{ formatDuration(session.startTime) }}</span>
         <span>{{ session.outputLineCount }} 行</span>
       </div>
+
+      <div class="last-line" v-if="session.lastLine">
+        {{ session.lastLine }}
+      </div>
     </div>
 
     <div class="thumbnail-footer" v-if="session.errorCount > 0">
@@ -468,56 +658,57 @@ onUnmounted(() => {
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed } from 'vue'
 
 const props = defineProps({
   session: {
     type: Object,
     required: true
   }
-});
+})
 
 const statusIcon = computed(() => {
   const icons = {
-    'unstarted': '⚪',
-    'starting': '🔵',
-    'running': '🟢',
-    'idle': '🟡',
-    'completed': '✅',
-    'error': '🔴',
-    'stopped': '⚫'
-  };
-  return icons[props.session.status] || '❓';
-});
+    unstarted: '⚪',
+    starting: '🔵',
+    running: '🟢',
+    idle: '🟡',
+    stuck: '🟠',
+    completed: '✅',
+    error: '🔴',
+    stopped: '⚫'
+  }
+  return icons[props.session.status] || '❓'
+})
 
 const showProgress = computed(() => {
-  return ['starting', 'running', 'idle'].includes(props.session.status);
-});
+  return ['starting', 'running', 'idle', 'stuck'].includes(props.session.status)
+})
 
 const progressPercent = computed(() => {
-  // 基于输出行数的简单进度估算
-  // 实际应用中可以根据具体工具调整
-  const lines = props.session.outputLineCount;
-  return Math.min(100, (lines / 100) * 100);
-});
+  // 注意：这里只是“活跃度指示”，不是准确的任务进度条
+  const lines = props.session.outputLineCount || 0
+  return Math.min(100, (lines / 100) * 100)
+})
 
 const tooltipText = computed(() => {
   return `${props.session.configType} - ${props.session.status}\n` +
          `运行时长: ${formatDuration(props.session.startTime)}\n` +
          `输出行数: ${props.session.outputLineCount}\n` +
-         `错误数: ${props.session.errorCount}`;
-});
+         `错误数: ${props.session.errorCount}\n` +
+         `最后输出: ${props.session.lastLine || ''}`
+})
 
 const formatDuration = (startTime) => {
-  const duration = Date.now() - startTime;
-  const seconds = Math.floor(duration / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
+  const duration = Date.now() - startTime
+  const seconds = Math.floor(duration / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
 
-  if (hours > 0) return `${hours}h ${minutes % 60}m`;
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-  return `${seconds}s`;
-};
+  if (hours > 0) return `${hours}h ${minutes % 60}m`
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
+  return `${seconds}s`
+}
 </script>
 
 <style scoped>
@@ -539,6 +730,7 @@ const formatDuration = (startTime) => {
 .status-completed { border-color: #8bc34a; background: #1b5e20; }
 .status-error { border-color: #f44336; background: #b71c1c; }
 .status-idle { border-color: #ffc107; }
+.status-stuck { border-color: #ff9800; background: #3b2b00; }
 
 .thumbnail-header {
   display: flex;
@@ -579,6 +771,15 @@ const formatDuration = (startTime) => {
   color: #888;
 }
 
+.last-line {
+  margin-top: 6px;
+  font-size: 10px;
+  color: #9aa0a6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .thumbnail-footer {
   margin-top: 6px;
   padding-top: 6px;
@@ -595,53 +796,73 @@ const formatDuration = (startTime) => {
 
 ### 4.3 集成到现有代码
 
-#### 修改 `pty-manager.js`
+#### 修改 `src/main/pty-manager.js`
 
 ```javascript
-const shellMonitor = require('./shell-monitor');
+const shellMonitor = require('./shell-monitor')
 
 class PTYManager {
-  createSession(sessionId, config, workingDirectory) {
-    // ... 现有代码 ...
+  createSession(config, workingDir, mainWindow) {
+    // ... 现有代码（生成 sessionId、spawn pty 等）...
 
     // 注册监控
-    shellMonitor.registerSession(sessionId, config.type);
+    shellMonitor.registerSession(sessionId, config.type, {
+      configName: config.name,
+      cwd
+    })
 
     // 监听输出
     ptyProcess.onData((data) => {
       // ... 现有代码 ...
-      shellMonitor.onData(sessionId, data);
-    });
+      shellMonitor.onData(sessionId, data)
+    })
 
     // 监听退出
     ptyProcess.onExit(({ exitCode }) => {
       // ... 现有代码 ...
-      shellMonitor.onExit(sessionId, exitCode);
-    });
+      shellMonitor.onExit(sessionId, exitCode)
+    })
   }
 }
 ```
 
-#### 修改 `main/index.js` 添加 IPC 处理
+#### 修改 `src/main/index.js` 添加 IPC + 推送
 
 ```javascript
-const shellMonitor = require('./shell-monitor');
+const shellMonitor = require('./shell-monitor')
 
-// 获取所有监控状态
-ipcMain.handle('get-monitor-states', () => {
-  return shellMonitor.getAllStates();
-});
+// 1) 主进程把 monitor update 推给渲染进程
+shellMonitor.on('update', (payload) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('monitor:update', payload)
+})
 
-// 聚焦到指定会话
-ipcMain.handle('focus-session', (event, sessionId) => {
-  mainWindow.webContents.send('focus-tab', sessionId);
-});
+// 2) 初始拉取（渲染进程首次打开面板时用）
+ipcMain.handle('monitor:getStates', () => shellMonitor.getAllStates())
 
-// 定期检查空闲会话
-setInterval(() => {
-  shellMonitor.checkIdleSessions();
-}, 5000);
+// 3) 用户输入打点：write-terminal 时通知 monitor（用于重置粘性状态、标记新一轮任务）
+ipcMain.handle('write-terminal', (event, sessionId, data) => {
+  // ... 原有参数校验 ...
+  shellMonitor.onUserInput(sessionId, data)
+  ptyManager.writeToSession(sessionId, data)
+})
+
+// 4) 周期性 idle/stuck 判定（提示符优先，超时兜底）
+setInterval(() => shellMonitor.tick(), 1000)
 ```
+
+#### 修改 `src/preload/index.js` 暴露监控 API
+
+```javascript
+monitorGetStates: () => ipcRenderer.invoke('monitor:getStates'),
+onMonitorUpdate: (callback) => {
+  const handler = (event, payload) => callback(event, payload)
+  ipcRenderer.on('monitor:update', handler)
+  return () => ipcRenderer.removeListener('monitor:update', handler)
+},
+```
+
+UI 侧聚焦建议直接走组件事件：`MonitorPanel` 发出 `focus(sessionId)`，`App.vue` 将 `activeTabId` 设置为该值即可（无需再走 IPC）。
 
 ## 五、使用场景
 
@@ -698,7 +919,8 @@ setInterval(() => {
 
 ### 7.3 挑战：无法准确判断"完成"
 **解决方案**:
-- 结合多个指标综合判断（进程退出 + 输出模式 + 空闲时间）
+- 结合多个指标综合判断（进程退出 + 输出模式 + 提示符/空闲时间）
+- 优先识别“提示符返回/回合边界”（必要时注入 `__MPS_PROMPT__` 标记增强稳定性）
 - 提供手动标记完成的功能
 - 学习用户的标记行为，优化自动检测
 
@@ -728,6 +950,14 @@ setInterval(() => {
 4. **第四阶段**: 添加完成检测逻辑
 5. **第五阶段**: 优化性能和用户体验
 6. **第六阶段**: 添加高级功能（通知、日志等）
+
+### 8.1 验收与测试（建议）
+
+- 单元测试：输出规范化、规则匹配、状态机转移（starting→running→idle/stuck→completed/error/stopped）
+- 压力测试：高输出（多 MB）、多会话（10+）下 CPU/内存与 UI 流畅度
+- 误报/漏报回归：收集真实输出样本，更新默认 `monitor-rules`，并允许用户覆盖
+- 隐私/安全：monitor:update 只发统计与最后 N 行（可配置），不落盘、不截图
+
 
 ## 九、总结
 
