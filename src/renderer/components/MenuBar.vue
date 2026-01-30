@@ -1,15 +1,158 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setLocale } from '../i18n'
+import { validateHttpUrl } from '../utils/http-url'
 
-const emit = defineEmits(['openConfig'])
+const props = defineProps({
+  mode: {
+    type: String,
+    default: 'shell'
+  }
+})
+
+const emit = defineEmits(['openConfig', 'changeMode'])
 const showSettings = ref(false)
 const version = ref('')
 const updateState = ref({ state: 'idle' })
 let unsubscribeUpdate = null
 
 const { t, locale } = useI18n()
+
+const REMOTE_BASE_URL_KEY = 'mps.remote.baseUrl'
+const REMOTE_REMOTEAPP_ENABLED_KEY = 'mps.remote.remoteAppEnabled'
+const REMOTE_REMOTEAPP_CLIENT_ID_KEY = 'mps.remote.remoteAppClientId'
+const REMOTE_VNC_CLIENT_ID_KEY = 'mps.remote.vncClientId'
+const REMOTE_CLIENT_ID_BASE64_KEY = 'mps.remote.clientIdBase64'
+const REMOTE_SYSTEM_RDP_PORT_KEY = 'mps.remote.systemRdpPort'
+const MONITOR_THUMBNAIL_MODE_KEY = 'mps.monitor.thumbnailMode' // card | terminal
+
+const REMOTE_APP_ALIAS = '||MultipleShell'
+
+const readLocalStorage = (key, fallback = '') => {
+  try {
+    const value = localStorage.getItem(key)
+    return value === null ? fallback : String(value)
+  } catch (_) {
+    return fallback
+  }
+}
+
+const writeLocalStorage = (key, value) => {
+  try {
+    localStorage.setItem(key, value)
+  } catch (_) {}
+}
+
+const notifyRemoteSettingsChanged = () => {
+  try {
+    window.dispatchEvent(new Event('mps:remote-settings'))
+  } catch (_) {}
+}
+
+const notifyMonitorSettingsChanged = () => {
+  try {
+    window.dispatchEvent(new Event('mps:monitor-settings'))
+  } catch (_) {}
+}
+
+const parseBool = (value, fallback = false) => {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (!raw) return fallback
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
+const normalizeMonitorThumbnailMode = (value) => {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === 'terminal') return 'terminal'
+  return 'card'
+}
+
+const remoteBaseUrl = ref(readLocalStorage(REMOTE_BASE_URL_KEY, ''))
+const remoteAppEnabled = ref(parseBool(readLocalStorage(REMOTE_REMOTEAPP_ENABLED_KEY, '0'), false))
+const remoteAppClientId = ref(readLocalStorage(REMOTE_REMOTEAPP_CLIENT_ID_KEY, ''))
+const vncClientId = ref(readLocalStorage(REMOTE_VNC_CLIENT_ID_KEY, ''))
+const clientIdBase64 = ref(parseBool(readLocalStorage(REMOTE_CLIENT_ID_BASE64_KEY, '0'), false))
+const systemRdpPort = ref(readLocalStorage(REMOTE_SYSTEM_RDP_PORT_KEY, '3389') || '3389')
+const monitorThumbnailMode = ref(normalizeMonitorThumbnailMode(readLocalStorage(MONITOR_THUMBNAIL_MODE_KEY, 'card')))
+
+const remoteBaseUrlValidation = computed(() => validateHttpUrl(remoteBaseUrl.value))
+const remoteBaseUrlError = computed(() => {
+  const result = remoteBaseUrlValidation.value
+  if (result.isEmpty || result.isValid) return ''
+  if (result.error === 'whitespace') return t('remote.urlHasSpacesHint')
+  if (result.error === 'protocol') return t('remote.urlUnsupportedProtocolHint')
+  return t('remote.urlInvalidHint')
+})
+const remoteBaseUrlWarning = computed(() => {
+  const result = remoteBaseUrlValidation.value
+  if (!result.isValid) return ''
+  if (result.warning === 'http') return t('remote.urlHttpWarningHint')
+  return ''
+})
+
+const systemRdpPortError = computed(() => {
+  const raw = String(systemRdpPort.value ?? '').trim()
+  if (!raw) return t('remote.systemRdpPortInvalidHint')
+  const port = Number.parseInt(raw, 10)
+  if (!Number.isFinite(port) || port < 1 || port > 65535) return t('remote.systemRdpPortInvalidHint')
+  return ''
+})
+
+const refreshRemoteSettings = () => {
+  remoteBaseUrl.value = readLocalStorage(REMOTE_BASE_URL_KEY, '')
+  remoteAppEnabled.value = parseBool(readLocalStorage(REMOTE_REMOTEAPP_ENABLED_KEY, '0'), false)
+  remoteAppClientId.value = readLocalStorage(REMOTE_REMOTEAPP_CLIENT_ID_KEY, '')
+  vncClientId.value = readLocalStorage(REMOTE_VNC_CLIENT_ID_KEY, '')
+  clientIdBase64.value = parseBool(readLocalStorage(REMOTE_CLIENT_ID_BASE64_KEY, '0'), false)
+  systemRdpPort.value = readLocalStorage(REMOTE_SYSTEM_RDP_PORT_KEY, '3389') || '3389'
+}
+
+const clearRemoteSettings = () => {
+  const confirmed = window.confirm ? window.confirm(t('remote.clearSettingsConfirm')) : true
+  if (!confirmed) return
+
+  remoteBaseUrl.value = ''
+  remoteAppEnabled.value = false
+  remoteAppClientId.value = ''
+  vncClientId.value = ''
+  clientIdBase64.value = false
+  systemRdpPort.value = '3389'
+}
+
+watch(remoteBaseUrl, (value) => {
+  writeLocalStorage(REMOTE_BASE_URL_KEY, String(value ?? ''))
+  notifyRemoteSettingsChanged()
+})
+watch(remoteAppEnabled, (value) => {
+  writeLocalStorage(REMOTE_REMOTEAPP_ENABLED_KEY, value ? '1' : '0')
+  notifyRemoteSettingsChanged()
+})
+watch(remoteAppClientId, (value) => {
+  writeLocalStorage(REMOTE_REMOTEAPP_CLIENT_ID_KEY, String(value ?? ''))
+  notifyRemoteSettingsChanged()
+})
+watch(vncClientId, (value) => {
+  writeLocalStorage(REMOTE_VNC_CLIENT_ID_KEY, String(value ?? ''))
+  notifyRemoteSettingsChanged()
+})
+watch(clientIdBase64, (value) => {
+  writeLocalStorage(REMOTE_CLIENT_ID_BASE64_KEY, value ? '1' : '0')
+  notifyRemoteSettingsChanged()
+})
+watch(systemRdpPort, (value) => {
+  writeLocalStorage(REMOTE_SYSTEM_RDP_PORT_KEY, String(value ?? ''))
+  notifyRemoteSettingsChanged()
+})
+watch(monitorThumbnailMode, (value) => {
+  const normalized = normalizeMonitorThumbnailMode(value)
+  if (value !== normalized) {
+    monitorThumbnailMode.value = normalized
+    return
+  }
+  writeLocalStorage(MONITOR_THUMBNAIL_MODE_KEY, normalized)
+  notifyMonitorSettingsChanged()
+})
 
 const updateStatus = computed(() => updateState.value?.state || 'idle')
 const updateProgress = computed(() => {
@@ -46,8 +189,52 @@ const updateTitle = computed(() => {
   return t('updates.actionCheck')
 })
 
+const rdpApplyState = ref('idle') // idle | loading | loaded | error
+let rdpApplyTimer = null
+
+const armRdpApplyState = () => {
+  if (rdpApplyTimer) clearTimeout(rdpApplyTimer)
+  rdpApplyTimer = setTimeout(() => {
+    rdpApplyState.value = 'idle'
+    rdpApplyTimer = null
+  }, 1400)
+}
+
+const applyRdpConfig = async () => {
+  if (rdpApplyState.value === 'loading') return
+  if (systemRdpPortError.value) {
+    rdpApplyState.value = 'error'
+    armRdpApplyState()
+    return
+  }
+
+  if (!window?.electronAPI?.remoteApplyRdpConfig) {
+    rdpApplyState.value = 'error'
+    armRdpApplyState()
+    return
+  }
+
+  const port = Number.parseInt(String(systemRdpPort.value ?? '').trim(), 10)
+
+  rdpApplyState.value = 'loading'
+  try {
+    await window.electronAPI.remoteApplyRdpConfig({ systemRdpPort: port })
+    rdpApplyState.value = 'loaded'
+    armRdpApplyState()
+  } catch (err) {
+    console.error('[mps] applyRdpConfig failed', err)
+    rdpApplyState.value = 'error'
+    armRdpApplyState()
+  }
+}
+
 const openConfig = () => {
   emit('openConfig')
+}
+
+const setMode = (nextMode) => {
+  if (!nextMode || nextMode === props.mode) return
+  emit('changeMode', nextMode)
 }
 
 const openSettings = () => {
@@ -100,6 +287,9 @@ const closeSettings = () => {
 }
 
 onMounted(async () => {
+  refreshRemoteSettings()
+  window.addEventListener('mps:remote-settings', refreshRemoteSettings)
+
   if (window?.electronAPI?.appGetVersion) {
     try {
       version.value = await window.electronAPI.appGetVersion()
@@ -118,9 +308,16 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('mps:remote-settings', refreshRemoteSettings)
+
   if (unsubscribeUpdate) {
     unsubscribeUpdate()
     unsubscribeUpdate = null
+  }
+
+  if (rdpApplyTimer) {
+    clearTimeout(rdpApplyTimer)
+    rdpApplyTimer = null
   }
 })
 
@@ -143,6 +340,32 @@ const syncUpdateState = (payload) => {
 <template>
   <div class="menu-bar">
     <div class="left-actions">
+      <div class="mode-toggle" role="tablist" aria-label="mode">
+        <button
+          class="mode-btn"
+          type="button"
+          :class="{ active: props.mode === 'shell' }"
+          @click="setMode('shell')"
+        >
+          {{ t('menu.modeShell') }}
+        </button>
+        <button
+          class="mode-btn"
+          type="button"
+          :class="{ active: props.mode === 'monitor' }"
+          @click="setMode('monitor')"
+        >
+          {{ t('menu.modeMonitor') }}
+        </button>
+        <button
+          class="mode-btn"
+          type="button"
+          :class="{ active: props.mode === 'remote' }"
+          @click="setMode('remote')"
+        >
+          {{ t('menu.modeRemote') }}
+        </button>
+      </div>
       <button class="menu-btn" @click="openConfig">
         <span class="btn-text">{{ t('menu.manageTemplates') }}</span>
       </button>
@@ -222,6 +445,121 @@ const syncUpdateState = (payload) => {
               </button>
             </div>
 
+            <div class="section-label section-label--tight">{{ t('monitor.settings.title') }}</div>
+            <div class="lang-options">
+              <button class="lang-option" :class="{ active: monitorThumbnailMode === 'card' }" @click="monitorThumbnailMode = 'card'">
+                <span class="lang-left">
+                  <span class="tag">CARD</span>
+                  <span>{{ t('monitor.settings.modeCard') }}</span>
+                </span>
+                <span v-if="monitorThumbnailMode === 'card'" class="check" aria-hidden="true">OK</span>
+              </button>
+              <button
+                class="lang-option"
+                :class="{ active: monitorThumbnailMode === 'terminal' }"
+                @click="monitorThumbnailMode = 'terminal'"
+              >
+                <span class="lang-left">
+                  <span class="tag">TTY</span>
+                  <span>{{ t('monitor.settings.modeTerminal') }}</span>
+                </span>
+                <span v-if="monitorThumbnailMode === 'terminal'" class="check" aria-hidden="true">OK</span>
+              </button>
+            </div>
+            <div class="update-hint">{{ t('monitor.settings.hint') }}</div>
+
+            <div class="section-label section-label--tight">{{ t('remote.title') }}</div>
+            <div class="remote-card">
+              <label class="toggle-row">
+                <input class="toggle-input" type="checkbox" v-model="remoteAppEnabled" />
+                <span class="toggle-label">{{ t('remote.remoteAppEnabled') }}</span>
+              </label>
+
+              <label class="toggle-row">
+                <input class="toggle-input" type="checkbox" v-model="clientIdBase64" />
+                <span class="toggle-label">{{ t('remote.clientIdBase64') }}</span>
+              </label>
+
+              <div class="field">
+                <div class="field-label">{{ t('remote.systemRdpPort') }}</div>
+                <input
+                  v-model="systemRdpPort"
+                  class="field-input"
+                  :class="{ 'field-input--error': !!systemRdpPortError }"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  step="1"
+                  :placeholder="t('remote.systemRdpPortPlaceholder')"
+                  spellcheck="false"
+                />
+                <div v-if="systemRdpPortError" class="field-hint field-hint--error">{{ systemRdpPortError }}</div>
+              </div>
+
+              <div class="field">
+                <div class="field-label">{{ t('remote.baseUrl') }}</div>
+                <input
+                  v-model="remoteBaseUrl"
+                  class="field-input"
+                  :class="{ 'field-input--error': !!remoteBaseUrlError }"
+                  type="text"
+                  :placeholder="t('remote.baseUrlPlaceholder')"
+                  spellcheck="false"
+                />
+                <div v-if="remoteBaseUrlError" class="field-hint field-hint--error">{{ remoteBaseUrlError }}</div>
+                <div v-else-if="remoteBaseUrlWarning" class="field-hint field-hint--warn">{{ remoteBaseUrlWarning }}</div>
+              </div>
+
+              <div class="field">
+                <div class="field-label">{{ t('remote.remoteAppClientId') }}</div>
+                <input
+                  v-model="remoteAppClientId"
+                  class="field-input"
+                  type="text"
+                  :placeholder="t('remote.remoteAppNamePlaceholder')"
+                  spellcheck="false"
+                />
+                <div class="field-hint field-hint--muted">
+                  {{ t('remote.remoteAppAliasLabel') }}: <span class="remote-alias">{{ REMOTE_APP_ALIAS }}</span>
+                </div>
+              </div>
+
+              <div class="field">
+                <div class="field-label">{{ t('remote.vncClientId') }}</div>
+                <input
+                  v-model="vncClientId"
+                  class="field-input"
+                  type="text"
+                  :placeholder="t('remote.vncNamePlaceholder')"
+                  spellcheck="false"
+                />
+              </div>
+
+              <div class="remote-hint">{{ t('remote.hint') }}</div>
+
+              <div class="remote-actions">
+                <button
+                  class="remote-load-btn"
+                  type="button"
+                  :disabled="rdpApplyState === 'loading' || !!systemRdpPortError"
+                  @click="applyRdpConfig"
+                >
+                  {{
+                    rdpApplyState === 'loading'
+                      ? t('remote.loading')
+                      : rdpApplyState === 'loaded'
+                        ? t('remote.loaded')
+                        : rdpApplyState === 'error'
+                          ? t('remote.loadFailed')
+                          : t('remote.loadRdpConfig')
+                  }}
+                </button>
+                <button class="remote-clear-btn" type="button" @click="clearRemoteSettings">
+                  {{ t('remote.clearSettings') }}
+                </button>
+              </div>
+            </div>
+
             <div class="section-label section-label--tight">{{ t('updates.title') }}</div>
             <div class="update-card">
               <div class="update-row">
@@ -299,6 +637,37 @@ const syncUpdateState = (payload) => {
   gap: 6px;
 }
 
+.mode-toggle {
+  display: inline-flex;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transition: background 0.15s ease, color 0.15s ease;
+  -webkit-app-region: no-drag;
+}
+
+.mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.mode-btn.active {
+  background: rgba(63, 114, 196, 0.22);
+  color: #bfdbfe;
+}
+
 .version-tag {
   padding: 2px 8px;
   border-radius: 999px;
@@ -318,6 +687,139 @@ const syncUpdateState = (payload) => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.remote-card {
+  background: var(--surface-hover);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary-color);
+}
+
+.toggle-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.field-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: rgba(59, 130, 246, 0.6);
+}
+
+.field-input--error {
+  border-color: rgba(239, 68, 68, 0.72);
+}
+
+.field-hint {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.field-hint--muted {
+  color: var(--text-secondary);
+}
+
+.remote-alias {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-weight: 900;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.field-hint--error {
+  color: rgba(252, 165, 165, 0.95);
+}
+
+.field-hint--warn {
+  color: rgba(253, 224, 71, 0.95);
+}
+
+.remote-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.remote-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.remote-load-btn {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(59, 130, 246, 0.42);
+  background: rgba(59, 130, 246, 0.18);
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.remote-load-btn:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.26);
+  border-color: rgba(59, 130, 246, 0.55);
+}
+
+.remote-load-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.remote-clear-btn {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.remote-clear-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 .update-row {
@@ -466,6 +968,9 @@ const syncUpdateState = (payload) => {
   border-radius: var(--radius-lg);
   box-shadow: 0 18px 28px rgba(0, 0, 0, 0.55);
   overflow: hidden;
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
   animation: modal-pop 0.16s ease-out;
 }
 
@@ -516,6 +1021,9 @@ const syncUpdateState = (payload) => {
 }
 
 .settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   padding: 14px;
 }
 

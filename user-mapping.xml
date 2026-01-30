@@ -1,0 +1,37 @@
+<user-mapping>
+    <!-- 管理员账户 - 当前应用（RemoteApp）+ VNC（桌面） -->
+    <authorize username="admin" password="admin">
+        <!-- ✅ 当前应用 RemoteApp（应用级）
+             remote-app 写法：||<alias>
+             例：mstsc 验证 RemoteApp：
+               remoteapplicationprogram:s:||multipleshell
+             若 RemoteApp 启动失败：在被控 Windows（RDP 服务端）运行 scripts/win-remoteapp-ensure.ps1 注册 RemoteApp 别名
+        -->
+
+        <connection name="MultipleShell (RemoteApp / 3389 / NLA)">
+            <protocol>rdp</protocol>
+            <param name="hostname">49.232.162.8</param>
+            <param name="port">3389</param>
+
+            <!-- 被控端 Windows 登录账号（建议用专用账号，别用 Administrator） -->
+            <param name="username">Administrator</param>
+            <param name="password">Zz0214563210!</param>
+            <!-- 域账号可填写 domain（可选） -->
+            <!-- <param name="domain">YOUR_DOMAIN</param> -->
+
+            <!-- 推荐启用 NLA；若证书为自签，忽略证书校验 -->
+            <param name="security">nla</param>
+            <param name="ignore-cert">true</param>
+
+            <!-- RemoteApp：只显示应用窗口（当前应用） -->
+            <param name="remote-app">||MultipleShell</param>
+        </connection>
+
+        <connection name="VNC :1">
+            <protocol>vnc</protocol>
+            <param name="hostname">49.232.162.8</param>
+            <param name="port">5901</param>
+            <param name="password">vnc_password</param>
+        </connection>
+    </authorize>
+</user-mapping>

@@ -3,6 +3,8 @@
 一个面向本地开发/调试场景的多终端管理器：用“配置模板”一键启动不同类型的终端会话（Claude Code / Codex / OpenCode），在一个窗口内集中管理多个 PowerShell 会话，并提供语音输入、自动更新、加密存储等配套能力。
 
 > 当前实现默认使用 `powershell.exe` 启动终端（偏 Windows 使用场景）。
+>
+> 可选：提供 **Remote 模式** 作为 Guacamole RemoteApp/VNC 的快捷入口（打开/复制直达链接），便于手机/浏览器访问。
 
 ## 功能一览（按当前代码实现）
 
@@ -14,6 +16,8 @@
 - 语音输入：录音 -> 调用转写接口 -> 结果直接写入当前终端输入流。
 - 自动更新：基于 `electron-updater`（generic feed），支持检查/下载/重启安装，并向渲染进程实时推送状态。
 - 国际化：内置 `zh-CN` / `en`，可在设置中切换。
+- 视图模式（缩略卡片）：用“摘要卡片”在一个大盘里查看所有会话状态（运行/空闲/卡住/完成/错误）；不做终端画面截图，仅保留最后 N 行输出预览（默认 20 行）以节省资源并降低敏感信息暴露风险。
+- 远程模式（Remote）：配置 Guacamole 入口 URL + RemoteApp/VNC 连接名，一键“打开/复制”直达链接（`/#/client/c/<连接ID>`），适合手机浏览器/PWA。
 - 终端可用性增强：
   - 右键：有选区则复制；无选区则粘贴。
   - 选择保护：大量输出时尽量避免干扰鼠标选区/鼠标抬起的选择结束。
@@ -58,10 +62,25 @@ npm run build:win
 
 其他打包命令见 `package.json` scripts（如 `build` / `build:win:x64` / `build:win:ia32`）。
 
+> 打包产物默认输出到 `release/<arch>/`（见 `electron-builder.json`）。
+
 ### 自检（配置加密/写入逻辑）
 
 ```bash
 npm run selfcheck:rpd
+```
+
+### 自检（视图状态机）
+
+```bash
+npm run selfcheck:monitor
+```
+
+可选补充（更偏压力/边界检查）：
+
+```bash
+node .\\scripts\\monitor-pty-selfcheck.js
+node .\\scripts\\monitor-stresscheck.js
 ```
 
 ## 使用指南
@@ -91,6 +110,60 @@ npm run selfcheck:rpd
 - `Ctrl+T`：新建标签
 - `Ctrl+W`：关闭当前标签（快捷关闭，不走 UI 输入确认）
 - `F12`：切换 DevTools（开发/排查用）
+
+### 视图模式（缩略卡片）
+
+- 入口：窗口左上角“模式切换”选择“视图”。
+- dock 浮窗：在 Shell 模式右下角点击“视图”可打开浮窗面板（可收起/关闭），无需切换模式。
+- 内容：每个会话对应一张卡片，顶部显示终端名称；卡片内展示工作目录、类型、状态、运行时长、最近活跃时间、输出行数与错误计数。
+- 操作：单击卡片仅聚焦会话；双击卡片或点击“打开”进入终端并切回 Shell。
+- 资源节省：不截图、不落盘全量日志；仅内存保留最近 N 行（默认 20 行）+ 统计字段，并对视图更新做节流合并（默认 250ms）。
+
+实现细节与取舍说明见：`MONITOR_CARD_THUMBNAIL_SAVING_ZH.md`、`SHELL_MONITORING_SOLUTION.md`。
+
+### 远程模式（Remote / Guacamole 快捷入口）
+
+该模式用于把 Guacamole 门户/RemoteApp/VNC 的入口收敛到一个桌面客户端里（不在应用内嵌远程画面，只是生成链接并用系统默认浏览器打开）。
+
+1. 打开设置 -> 远程访问：
+   - `入口 URL`：Guacamole 的 base URL（例如 `https://remote.example.com/guacamole/`；如果你把 Guacamole 反代到域名根路径，也可以填 `https://remote.example.com/`）。
+   - `RemoteApp 快捷入口`：开关（关闭时 RemoteApp 入口永远不可用）。
+   - `连接名 Base64 编码`：开关（开启后会把下面填写的连接名做 Base64 编码再生成直达链接，用于部分 Guacamole/网关部署）。
+   - `RemoteApp 连接名` / `VNC 连接名`：推荐用 Guacamole 地址栏 `#/client/c/<...>` 的 `<...>`；也可用 `user-mapping.xml` 里的 `<connection name="...">`（若直达链接要求 Base64，请打开上面的 Base64 开关）。
+2. 切换到顶部模式“远程”，即可看到：
+   - 打开入口 / 复制入口链接
+   - 打开 RemoteApp / 复制 RemoteApp 直达链接
+   - 打开 VNC / 复制 VNC 直达链接
+
+注意：
+
+- 远程配置保存在渲染进程 `localStorage`（不加密、仅本机），不要在这里存放密码类敏感信息。
+
+## 可选：远程访问部署（Guacamole / RemoteApp / RD Web Client）
+
+仓库内包含一套“手机浏览器直达 RemoteApp/VNC/SSH”的参考配置与脚本（与 MultipleShell 核心终端功能解耦，不使用也不影响本地开发）。
+
+- Guacamole（Docker）：
+  - `docker-compose.yml`：`guacd` + `guacamole`，使用 `user-mapping.xml`（file auth）作为认证/连接定义示例。
+  - `extensions/`：可挂载 Guacamole 扩展 JAR；本仓库也提供 `extensions/custom-theme` 作为可选静态主题资源。
+  - 启动示例：
+
+    ```bash
+    docker compose up -d
+    ```
+
+    默认仅监听 `127.0.0.1:8080`，入口通常为 `http://127.0.0.1:8080/guacamole/`（建议用 Nginx 反代到 443 对外提供）。
+- Nginx 反代示例：
+  - `nginx.conf`：包含 Guacamole WebSocket 反代示例与 `sub_filter` 注入自定义 CSS/JS 的示例片段（按你的域名/证书路径调整）。
+- Windows RemoteApp 侧辅助脚本：
+  - `scripts/win-remoteapp-ensure.ps1`：开启 RDP+NLA、配置防火墙、从 `user-mapping.xml` 读取 `remote-app` 并注册到 `TSAppAllowList`（使 `||alias` 形式可用）。
+  - `scripts/test-rdp-connection.ps1`：RDP 端口 TCP 可达性检查（排查网络/防火墙）。
+- RD Web Client（官方 HTML5）路线（可替代 Guacamole）：
+  - 方案说明：`RD_WEB_CLIENT_WINDOWS_ZH.md`
+  - 证书绑定辅助脚本：`scripts/rds-rdwebclient-cert.ps1`
+- Guacamole 自定义主题（可选）：
+  - 说明：`extensions/custom-theme/README.md`
+  - 一键部署：`scripts/deploy-guacamole-theme.sh`
 
 ## 配置模板类型说明
 
@@ -150,6 +223,9 @@ npm run selfcheck:rpd
 - 额外文件：
   - `claude-homes/`、`codex-homes/`、`opencode-homes/` 用于落地模板文件（便于外部工具读取）。
   - Codex 会话会在临时目录创建 `mps-codex-home-*`，会话退出后自动清理（可用 `MPS_KEEP_CODEX_HOME=1` 禁止清理以便调试）。
+- 安全提醒（务必看）：
+  - `user-mapping.xml` 为 Guacamole file auth 示例，包含明文账号/密码与目标主机信息；部署前务必替换，并避免把真实凭据提交到仓库。
+  - 语音转写 API Key 当前由 `src/main/built-in-config-manager.js` 提供（示例实现）；生产环境建议改为从外部配置/安全存储注入，并做好密钥轮换。
 
 ## 自动更新（可选启用）
 
@@ -177,6 +253,16 @@ npm run selfcheck:rpd
 
 安装完成后重新执行 `npm install`。
 
+### 光标闪烁太快 / 多个光标框
+
+- xterm 没有公开的“闪烁频率”选项；需要 patch xterm 内部常量或切换 DOM renderer 并改动画时长。
+- 参考：`CURSOR_BLINKING_ISSUES.md`
+
+### 看不到滚动条 / 无法回滚到更早内容
+
+- 常见原因包括：overlay scrollbar、输出只用 `\r` 不换行、`clear/cls` 清屏、全屏 TUI（alternate screen）等。
+- 参考：`SHELL_SCROLLBAR_ANALYSIS.md`
+
 ## 目录结构（简要）
 
 ```
@@ -187,12 +273,45 @@ src/
 scripts/       # 自检/工具脚本
 build/         # NSIS 安装器脚本、图标等
 configs/       # 旧版/迁移用模板（应用会尝试导入）
+extensions/    # Guacamole 扩展/自定义主题静态资源（可选）
+dist/          # Vite 构建产物（自动生成）
+dist-electron/ # Vite Electron 构建产物（自动生成）
+release/       # electron-builder 输出目录（自动生成）
+
+docker-compose.yml  # Guacamole + guacd（file auth）示例
+nginx.conf          # Nginx 反代/HTTPS/Guacamole WebSocket 示例
+user-mapping.xml    # Guacamole file auth 示例（请替换账号/密码）
+electron-builder.json
 ```
 
 ## 备注（面向维护者）
 
 - `configs/` 目录内的 JSON 会在首次启动/迁移时尝试导入（详见 `src/main/config-manager.js`）。
-- 语音 API Key 当前为内置实现（见 `src/main/built-in-config-manager.js`）；如需改为外部配置/加密文件，可从 `scripts/encrypt-api-key.js` 和 `resources/voice-api.enc` 的思路继续完善。
+- 语音 API Key 当前为内置实现（见 `src/main/built-in-config-manager.js`）；如需改为外部配置/加密文件，可从 `scripts/encrypt-api-key.js`（生成 `resources/voice-api.enc`）的思路继续完善。
+- NSIS 安装/卸载“运行中检测 + 可选调试日志”实现位于 `build/installer.nsh`，相关说明见 `UNINSTALL_RUNNING_CHECK_SOLUTION.md`，草稿/排查记录见 `新建文本文档.txt`、`新建文本文档 (2).txt`。
+
+## 文档索引（仓库内）
+
+- 终端视图设计与取舍：
+  - `SHELL_MONITORING_SOLUTION.md`
+  - `MONITOR_CARD_THUMBNAIL_SAVING_ZH.md`
+  - `SHELL_MONITORING_TODO.md`
+- 终端体验问题分析：
+  - `CURSOR_BLINKING_ISSUES.md`
+  - `SHELL_SCROLLBAR_ANALYSIS.md`
+- Windows 安装/卸载（NSIS）：
+  - `UNINSTALL_RUNNING_CHECK_SOLUTION.md`
+- 远程访问（浏览器 / 手机）方案：
+  - `GUACAMOLE_REMOTEAPP_WINDOWS_ZH.md`
+  - `GUACAMOLE_REMOTEAPP_WINDOWS_ZH_TODO.md`
+  - `GUACAMOLE_REMOTEAPP_MULTIPLESHELL_ZH_TODO.md`
+  - `RD_WEB_CLIENT_WINDOWS_ZH.md`
+  - `RD_WEB_CLIENT_WINDOWS_ZH_TODO.md`
+  - `MOBILE_REMOTE_ACCESS_SOLUTION_ZH.md`
+  - `MOBILE_REMOTE_ACCESS_SOLUTION_WINDOWS_ZH.md`
+  - `MOBILE_REMOTE_ACCESS_SOLUTION_LINUX_ZH.md`
+- Guacamole 主题：
+  - `extensions/custom-theme/README.md`
 
 ## 反馈与贡献
 

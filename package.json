@@ -8,7 +8,8 @@
     "build:win": "vite build && electron-builder --win",
     "build:win:x64": "vite build && electron-builder --win --x64",
     "build:win:ia32": "vite build && electron-builder --win --ia32",
-    "selfcheck:rpd": "set MPS_SUPPRESS_DIALOGS=1&& electron .\\scripts\\rpd-selfcheck-electron.js"
+    "selfcheck:rpd": "set MPS_SUPPRESS_DIALOGS=1&& electron .\\scripts\\rpd-selfcheck-electron.js",
+    "selfcheck:monitor": "node .\\scripts\\monitor-selfcheck.js"
   },
   "dependencies": {
     "node-pty": "^1.0.0",

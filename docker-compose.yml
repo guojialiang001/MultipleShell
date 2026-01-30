@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  # Guacamole 守护进程
+  guacd:
+    image: guacamole/guacd
+    container_name: guacd
+    restart: always
+    networks:
+      - guacamole_network
+
+  # Guacamole Web 应用 - 使用文件认证（user-mapping.xml）
+  guacamole:
+    image: guacamole/guacamole
+    container_name: guacamole
+    environment:
+      GUACD_HOSTNAME: guacd
+      GUACD_PORT: 4822
+    volumes:
+      # 可选：放置 Guacamole 扩展（LDAP/JDBC/TOTP/...）。tar.gz 解压后得到 *.jar，放到 ./extensions/
+      # 注意：基于 user-mapping.xml 的“简单认证/文件认证”是 guacamole.war 自带的，不需要 guacamole-auth-file-*.jar
+      - ./extensions:/etc/guacamole/extensions:ro
+      - ./user-mapping.xml:/etc/guacamole/user-mapping.xml:ro
+    ports:
+      # 只监听本机，建议由 Nginx 反代对外提供 443
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - guacd
+    restart: always
+    networks:
+      - guacamole_network
+
+networks:
+  guacamole_network:
+    driver: bridge

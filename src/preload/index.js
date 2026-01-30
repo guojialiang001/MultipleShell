@@ -14,8 +14,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateGetStatus: () => ipcRenderer.invoke('update:getStatus'),
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateQuitAndInstall: () => ipcRenderer.invoke('update:quitAndInstall'),
+  monitorGetStates: () => ipcRenderer.invoke('monitor:getStates'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:readText'),
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  remoteApplyRdpConfig: (payload) => ipcRenderer.invoke('remote:applyRdpConfig', payload),
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
   windowClose: () => ipcRenderer.invoke('window:close'),
@@ -36,6 +39,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, payload) => callback(payload)
     ipcRenderer.on('update:status', handler)
     return () => ipcRenderer.removeListener('update:status', handler)
+  },
+  onMonitorUpdate: (callback) => {
+    const handler = (event, payload) => callback(payload)
+    ipcRenderer.on('monitor:update', handler)
+    return () => ipcRenderer.removeListener('monitor:update', handler)
   },
 
   onTerminalExit: (sessionId, callback) => {

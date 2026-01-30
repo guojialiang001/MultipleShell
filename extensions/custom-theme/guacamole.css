@@ -1,0 +1,141 @@
+/* Guacamole 自定义主题 */
+
+/* 修改背景色 */
+body {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+}
+
+/* 修改连接界面背景 */
+.client {
+    background-color: #1a1a2e !important;
+}
+
+/* 修改顶部导航栏 */
+.menu {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+/* 修改侧边栏 */
+.sidebar {
+    background-color: rgba(22, 22, 46, 0.95) !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+/* 修改按钮样式 */
+.button, button {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    transition: all 0.3s ease !important;
+}
+
+.button:hover, button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
+}
+
+/* 修改输入框样式 */
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    border-radius: 6px !important;
+    color: #ffffff !important;
+    padding: 10px !important;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+textarea:focus,
+select:focus {
+    border-color: #667eea !important;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2) !important;
+    outline: none !important;
+}
+
+/* 修改连接列表 */
+.connection {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+    margin: 8px 0 !important;
+    transition: all 0.3s ease !important;
+}
+
+.connection:hover {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    border-color: #667eea !important;
+    transform: translateX(4px) !important;
+}
+
+/* 修改标题文字 */
+h1, h2, h3, h4, h5, h6 {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+}
+
+/* 修改普通文字 */
+p, span, label, div {
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* 修改滚动条 */
+::-webkit-scrollbar {
+    width: 10px !important;
+    height: 10px !important;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2) !important;
+    border-radius: 5px !important;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(102, 126, 234, 0.6) !important;
+    border-radius: 5px !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(102, 126, 234, 0.8) !important;
+}
+
+/* 修改通知/提示框 */
+.notification {
+    background-color: rgba(22, 22, 46, 0.95) !important;
+    border: 1px solid rgba(102, 126, 234, 0.5) !important;
+    border-radius: 8px !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+/* 修改工具栏 */
+.toolbar {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+    backdrop-filter: blur(10px) !important;
+    border-radius: 8px !important;
+}
+
+/* 添加品牌标识 */
+.menu::before {
+    content: "🚀 Remote Access";
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+    padding: 0 16px;
+}
+
+/* 隐藏 Guacamole 默认 logo（可选） */
+.logo {
+    display: none !important;
+}
+
+/* 添加自定义 logo */
+.menu {
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="50" font-size="40" fill="white">🖥️</text></svg>') !important;
+    background-repeat: no-repeat !important;
+    background-position: 16px center !important;
+    background-size: 32px 32px !important;
+    padding-left: 60px !important;
+}

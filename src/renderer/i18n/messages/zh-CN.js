@@ -6,7 +6,46 @@ export default {
   menu: {
     settings: '设置',
     manageTemplates: '管理配置',
-    language: '语言'
+    language: '语言',
+    modeShell: '终端',
+    modeMonitor: '视图',
+    modeRemote: '远程'
+  },
+  remote: {
+    title: '远程访问',
+    remoteAppEnabled: '启用 RemoteApp 快捷入口',
+    clientIdBase64: '连接名 Base64 编码',
+    baseUrl: '入口 URL（Guacamole）',
+    baseUrlPlaceholder: '例如：https://remote.example.com/guacamole/',
+    systemRdpPort: '系统 RDP 端口',
+    systemRdpPortPlaceholder: '例如：3389',
+    systemRdpPortInvalidHint: '端口需要为 1-65535 的整数',
+    remoteAppClientId: 'RemoteApp 连接名',
+    remoteAppNamePlaceholder: '例如：MultipleShell (RemoteApp / 3389 / NLA)',
+    remoteAppAliasLabel: 'RemoteApp 应用别名',
+    vncClientId: 'VNC 连接名',
+    vncNamePlaceholder: '例如：VNC :1',
+    clientIdPlaceholder: '例如：MultipleShell (RemoteApp / 3389 / NLA)',
+    hint: '直达链接形态：<入口URL>/#/client/c/<连接ID>（连接ID 可从浏览器地址栏获取；若你的连接名需要 Base64，可在设置里勾选“连接名 Base64 编码”）',
+    openPortal: '打开入口',
+    openRemoteApp: '打开 RemoteApp',
+    openVnc: '打开 VNC',
+    loadRdpConfig: '加载 RDP 配置',
+    loading: '加载中...',
+    loaded: '已加载',
+    loadFailed: '加载失败',
+    notConfigured: '请先在设置中配置入口 URL',
+    remoteAppDisabledHint: 'RemoteApp 已在设置中关闭',
+    missingClientIdHint: '请先填写连接名',
+    copyLink: '复制链接',
+    copied: '已复制',
+    copyFailed: '复制失败',
+    clearSettings: '清空远程配置',
+    clearSettingsConfirm: '确定清空远程配置？',
+    urlInvalidHint: '入口 URL 无效（需要以 http:// 或 https:// 开头）',
+    urlHasSpacesHint: '入口 URL 包含空格',
+    urlUnsupportedProtocolHint: '入口 URL 仅支持 http:// 或 https://',
+    urlHttpWarningHint: '提示：建议使用 https://（当前为 http://）'
   },
   updates: {
     title: '\u66f4\u65b0',
@@ -121,6 +160,46 @@ export default {
       claudeCode: 'Claude Code',
       codex: 'Codex',
       opencode: 'OpenCode'
+    }
+  },
+  monitor: {
+    title: '视图',
+    open: '打开终端',
+    collapse: '收起',
+    expand: '展开',
+    emptyTitle: '暂无会话',
+    emptyHint: '创建终端会话后，这里会显示运行状态。',
+    snapshotPending: '缩略图生成中...',
+    settings: {
+      title: '视图显示',
+      modeCard: '卡片',
+      modeTerminal: '视图',
+      hint: '视图模式会增加资源开销；默认建议使用“卡片”。'
+    },
+    stats: {
+      running: '运行中',
+      completed: '完成',
+      stuck: '卡住',
+      error: '错误'
+    },
+    types: {
+      claudeCode: 'Claude Code',
+      codex: 'Codex',
+      opencode: 'OpenCode'
+    },
+    status: {
+      starting: '启动中',
+      running: '运行中',
+      idle: '空闲',
+      completed: '完成',
+      stuck: '卡住',
+      error: '错误',
+      stopped: '已停止'
+    },
+    card: {
+      duration: '运行',
+      sinceActive: '距活动',
+      lines: '输出'
     }
   }
 }

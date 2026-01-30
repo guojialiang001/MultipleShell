@@ -1,12 +1,13 @@
-﻿﻿# MultipleShell 监控方案：缩略图模式监测三大类型执行状态
+﻿# MultipleShell 视图方案：缩略图模式监测三大类型执行状态
 
 ## 概述
 
-本方案为 MultipleShell 增加一个“缩略卡片（Thumbnail）监控面板”，用于实时观察三种配置类型（`claude-code` / `codex` / `opencode`）会话的运行状态、就绪/完成信号与异常情况。
+本方案为 MultipleShell 增加一个“缩略卡片（Thumbnail）视图面板”，用于实时观察三种配置类型（`claude-code` / `codex` / `opencode`）会话的运行状态、就绪/完成信号与异常情况。
 
-说明：这里的“缩略图”并不是截图终端画面，而是状态摘要卡片（图标 + 时长 + 输出活跃度 + 最后一行/错误提示）。这样可以：
-- 避免渲染端高频截图导致卡顿
-- 避免把终端中的敏感信息（token/路径/私有代码）以图片形式持久化
+说明：默认的“缩略图”不是终端画面截图，而是状态摘要卡片（图标 + 时长 + 输出活跃度 + 最后一行/错误提示）。这样可以：
+- 默认避免渲染端高频截图导致卡顿
+- 默认避免把终端中的敏感信息（token/路径/私有代码）以图片形式持久化
+> 可选：应用内可切换“终端画面（缩略图）”预览模式（低频抓取、缩放、仅内存、不落盘、不保留历史）。
 
 ### 目标（我们要得到什么）
 
@@ -20,26 +21,26 @@
 - 读取 Claude/Codex/OpenCode 的“内部进度百分比”
 - 语义级任务是否“真的做完”：只能基于进程事件与输出做启发式判断
 
-## 一、监控可行性分析
+## 一、视图可行性分析
 
 ### ✅ 可以监测的内容
 
-1. **进程状态监控**
+1. **进程状态观察**
    - PTY 进程是否存在
    - 进程退出码（正常/异常退出）
    - 进程运行时长
 
-2. **输出流监控**
+2. **输出流观察**
    - 终端输出内容实时捕获
    - 关键字匹配（成功/失败/错误标识）
    - 输出行数统计
 
-3. **配置状态监控**
+3. **配置状态观察**
    - 配置文件加载状态
    - 环境变量设置状态
    - 临时目录创建状态
 
-4. **会话活动监控**
+4. **会话活动观察**
    - 最后活动时间
    - 用户输入频率
    - 命令执行次数
@@ -62,11 +63,11 @@
 - 能在 `write-terminal`（用户输入）处打点：用于更可靠地判断“这一轮任务是否结束/回到提示符”
 - UI 侧支持节流/批量更新，避免高频刷新导致卡顿
 
-## 二、监控架构设计
+## 二、视图架构设计
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   缩略图监控面板                          │
+│                   缩略图视图面板                          │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
 │  │Claude Code│  │  Codex   │  │ OpenCode │              │
 │  │  [运行中] │  │  [完成]  │  │  [错误]  │              │
@@ -74,10 +75,10 @@
 │  └──────────┘  └──────────┘  └──────────┘              │
 └─────────────────────────────────────────────────────────┘
                         ↑
-                   监控数据收集
+                   视图数据收集
                         ↓
 ┌─────────────────────────────────────────────────────────┐
-│              Shell 监控服务 (新增)                        │
+│              Shell 视图服务 (新增)                        │
 │  ┌─────────────────────────────────────────────────┐   │
 │  │  - 输出流解析器 (Output Parser)                  │   │
 │  │  - 状态检测器 (Status Detector)                  │   │
@@ -95,7 +96,7 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 三、监控指标定义
+## 三、视图指标定义
 
 ### 3.1 基础状态
 
@@ -126,6 +127,7 @@
 提示符识别增强（可选但推荐）：
 - PowerShell 的默认提示符格式并不稳定（用户可能使用 oh-my-posh、自定义 prompt 等）
 - 推荐在会话启动时注入一个不易冲突的 prompt 标记（例如 `__MPS_PROMPT__`），让 monitor 能稳定识别“回到提示符”
+  - 当前实现：已内置 `__MPS_PROMPT__` 注入；如需禁用可设置环境变量 `MPS_DISABLE_PROMPT_MARKER=1`
 
 #### Claude Code (`claude-code`) 规则示例
 ```javascript
@@ -223,13 +225,13 @@ ERROR_EXCLUDE_PATTERNS: [
 ```
 src/
 ├── main/
-│   ├── shell-monitor.js          # 新增：Shell 监控服务（状态机 + 规则引擎）
+│   ├── shell-monitor.js          # 新增：Shell 视图服务（状态机 + 规则引擎）
 │   └── shell-monitor-rules.js    # 新增：内置默认规则（可被用户配置覆盖）
 ├── preload/
 │   └── index.js                  # 追加：monitor IPC API
 ├── renderer/
 │   └── components/
-│       ├── MonitorPanel.vue      # 新增：缩略图监控面板
+│       ├── MonitorPanel.vue      # 新增：缩略图视图面板
 │       └── SessionThumbnail.vue  # 新增：单个会话缩略图
 ```
 可选（推荐）：`configs/monitor-rules.json`（用户可编辑的规则覆盖文件）。
@@ -253,7 +255,7 @@ normalize(data):
 - 维护会话级残余行缓冲，避免 chunk 断行导致统计/匹配失真
 - stdout/stderr 走同一规范化流程，但保留来源用于诊断
 
-#### 4.2.1 Shell 监控服务 (`shell-monitor.js`)
+#### 4.2.1 Shell 视图服务 (`shell-monitor.js`)
 
 ```javascript
 const { EventEmitter } = require('events')
@@ -270,6 +272,8 @@ class ShellMonitor extends EventEmitter {
       idleMs: 30_000,
       stuckMs: 10 * 60_000,
       maxLastLines: 20,
+      maxLineLength: 2048,
+      maxRemainderChars: 4096,
       updateThrottleMs: 250,
       ...opts
     }
@@ -488,7 +492,7 @@ class ShellMonitor extends EventEmitter {
 module.exports = new ShellMonitor()
 ```
 
-#### 4.2.2 监控面板组件 (`MonitorPanel.vue`)
+#### 4.2.2 视图面板组件 (`MonitorPanel.vue`)
 
 ```vue
 <template>
@@ -545,7 +549,7 @@ const errorCount = computed(() =>
   sessions.value.filter(s => s.status === 'error').length
 )
 
-// 监听监控更新
+// 监听视图更新
 const handleMonitorUpdate = (event, { sessionId, state }) => {
   const index = sessions.value.findIndex(s => s.sessionId === sessionId)
   if (index >= 0) sessions.value[index] = state
@@ -794,6 +798,52 @@ const formatDuration = (startTime) => {
 </style>
 ```
 
+#### 4.2.4 应用左上角模式切换（视图模式 / 多命令行窗口模式，无缝衔接）
+
+为了让“视图”与“多命令行交互”能**随意切换、无缝衔接**，建议提供应用级别的 UI 模式切换（放在应用左上角，和现有按钮同一行）：
+
+- **多命令行窗口模式（Shell Mode）**：现有布局（TabBar + Terminal），用于输入/交互。
+- **视图模式（View Mode）**：用“视图大盘”作为主视图，展示所有会话缩略卡片与统计信息（终端会话仍在后台运行，不中断任务）。
+
+无缝衔接（硬性要求）：
+
+1. **切换模式不销毁终端 UI 状态**：不能因为从 Shell 切到 Monitor 就 `unmount/dispose` xterm，否则会丢失 scrollback/历史输出与选择状态。
+2. **切换模式不影响会话运行**：PTY 会话持续运行；视图订阅持续更新；Shell 视图隐藏期间不丢输出（至少不丢“显示层”的历史）。
+3. **切换模式不改变当前焦点会话**：`activeTabId` 在两种模式之间保持一致。
+4. **从 Monitor 切回 Shell 时自动修正尺寸**：需要触发一次 `fit()/resize`（例如 `nextTick` 后派发 `resize` 事件），避免 xterm 宽高计算错误。
+
+交互约定（避免强制跳转，允许用户自由切换）：
+
+- 左上角 toggle 负责**纯模式切换**：`Shell <-> Monitor`，用户可随时切换。
+- 视图模式点击会话卡片：**仅聚焦**（例如设置 `activeTabId=sessionId`），不强制自动切回 Shell。
+  - 可选增强：卡片提供一个显式操作（例如“打开终端”按钮/双击）用于一键切回 Shell 并聚焦，提升效率但不破坏“自由切换”。
+- 模式记忆（可选）：用 `localStorage`/`draftManager` 记住上次模式。
+
+实现建议（与现有组件配合）：
+
+- `App.vue` 维护 `uiMode`：`'shell' | 'monitor'`。
+- `MenuBar.vue` 左侧新增一个 segmented toggle（例如：`Shell / Monitor`），通过 `emit('changeMode', nextMode)` 通知父组件。
+- 为了满足“无缝衔接”，**建议使用 `v-show`（或 `<KeepAlive>`）隐藏/显示视图**，避免终端组件卸载导致输出丢失。
+
+伪代码示意（仅用于说明结构）：
+
+```vue
+<MenuBar :mode="uiMode" @changeMode="uiMode = $event" />
+
+<div v-show="uiMode === 'shell'">
+  <TabBar ... />
+  <Terminal ... />
+</div>
+
+<div v-show="uiMode === 'monitor'">
+  <MonitorPanel
+    variant="page"
+    @focus="(id) => { activeTabId = id }"
+    @open="(id) => { activeTabId = id; uiMode = 'shell' }"
+  />
+</div>
+```
+
 ### 4.3 集成到现有代码
 
 #### 修改 `src/main/pty-manager.js`
@@ -805,7 +855,7 @@ class PTYManager {
   createSession(config, workingDir, mainWindow) {
     // ... 现有代码（生成 sessionId、spawn pty 等）...
 
-    // 注册监控
+    // 注册视图
     shellMonitor.registerSession(sessionId, config.type, {
       configName: config.name,
       cwd
@@ -851,7 +901,7 @@ ipcMain.handle('write-terminal', (event, sessionId, data) => {
 setInterval(() => shellMonitor.tick(), 1000)
 ```
 
-#### 修改 `src/preload/index.js` 暴露监控 API
+#### 修改 `src/preload/index.js` 暴露视图 API
 
 ```javascript
 monitorGetStates: () => ipcRenderer.invoke('monitor:getStates'),
@@ -864,11 +914,61 @@ onMonitorUpdate: (callback) => {
 
 UI 侧聚焦建议直接走组件事件：`MonitorPanel` 发出 `focus(sessionId)`，`App.vue` 将 `activeTabId` 设置为该值即可（无需再走 IPC）。
 
+### 4.4 资源节省与隐私策略（缩略卡片/Thumbnail）
+
+> 说明：视图模式的“缩略图”默认不是截图终端画面，而是状态摘要卡片；同时也提供可选“终端画面（缩略图）”预览模式。完整落地版说明见 `MONITOR_CARD_THUMBNAIL_SAVING_ZH.md`。
+
+#### 4.4.1 默认不截图：用“摘要卡片”替代“终端画面缩略图”
+
+- 不做高频截图（避免 CPU/GPU 负载与渲染抖动）
+- 不把终端敏感信息（token/路径/私有代码）以图片形式持久化/扩散
+
+#### 4.4.2 只保留“最后 N 行”，不保留全量日志
+
+- 主进程仅在内存中维护 `lastLines` 滑动窗口
+- 默认 `maxLastLines = 20`（避免内存随输出量无限增长）
+- 单行长度截断：默认 `maxLineLength = 2048`（避免单行超长输出导致内存飙升）
+- 只额外维护 `lastLine / lastErrorLine` 与计数器，不做全量 scrollback 镜像
+
+#### 4.4.3 增量解析 + 增量匹配（避免重复扫描）
+
+- 对输出做规范化：去 ANSI、统一 CRLF/CR 为 LF
+- 维护 `remainder` 断行缓冲：只对“新增行 + 尾巴”做规则匹配
+- `remainder` 上限：默认 `maxRemainderChars = 4096`（避免无换行输出导致内存无限增长）
+- 错误兜底命中采用 exclude 规则，降低误报（避免把 `0 failed/no error` 判成失败）
+
+#### 4.4.4 IPC/UI 节流（避免高频刷新）
+
+- 主进程更新节流：默认 `updateThrottleMs = 250`
+- 只在 state 变更（dirty）时推送 `monitor:update`
+- 渲染侧只做增量 apply（按 `sessionId` 更新/删除），并用 1s 时钟刷新“耗时/空闲时长”
+
+#### 4.4.5 边界约束
+
+- 进程退出后“冻结状态”：忽略后续输出/输入（防止状态回写）
+- 视图链路只传递“必要字段”，避免把完整输出通过 IPC 广播
+
+### 4.5 当前落地实现备注（与本文差异点）
+
+- 规则覆盖文件：当前未实现 `configs/monitor-rules.json`；规则维护在 `src/main/shell-monitor-rules.js`
+- UI 形态：支持“视图大盘 page 视图 + 卡片 grid”；同时支持 Shell 模式下的 dock 浮窗（可收起/关闭）
+- prompt 识别：默认开启 `__MPS_PROMPT__` 注入（提升自定义 prompt 场景稳定性）；可用 `MPS_DISABLE_PROMPT_MARKER=1` 关闭
+- 内存保护：`maxLastLines/maxLineLength/maxRemainderChars` 已在主进程默认开启，避免 monitor 因极端输出无限增长
+
+### 4.6 排查与自检（当前项目内置）
+
+- 自检脚本（monitor 核心）：`npm run selfcheck:monitor`
+- 自检脚本（kill/unregister 回归）：`node scripts/monitor-pty-selfcheck.js`
+- 自检脚本（压力/内存边界）：`node scripts/monitor-stresscheck.js`
+- prompt 识别异常排查：
+  - 先临时设置 `MPS_DISABLE_PROMPT_MARKER=1`，确认是否为 prompt 注入兼容性问题
+  - 根据实际输出（PowerShell/oh-my-posh/codex/opencode）调整 `src/main/shell-monitor-rules.js`
+
 ## 五、使用场景
 
 ### 5.1 开发调试场景
 - 同时运行多个 AI 工具进行对比测试
-- 实时监控哪个工具先完成任务
+- 实时查看哪个工具先完成任务
 - 快速定位出错的会话
 
 ### 5.2 批量任务场景
@@ -877,16 +977,16 @@ UI 侧聚焦建议直接走组件事件：`MonitorPanel` 发出 `focus(sessionId
 - 完成后自动通知
 
 ### 5.3 长时间运行场景
-- 监控长时间运行的任务状态
+- 查看长时间运行的任务状态
 - 检测空闲或卡死的会话
 - 自动记录完成时间
 
 ## 六、扩展功能建议
 
-### 6.1 高级监控
+### 6.1 高级视图
 - **输出日志记录**: 保存每个会话的完整输出到文件
-- **性能指标**: CPU/内存使用率监控
-- **网络监控**: API 调用次数和响应时间
+- **性能指标**: CPU/内存使用率统计
+- **网络指标**: API 调用次数和响应时间
 
 ### 6.2 智能分析
 - **AI 输出解析**: 使用正则或 AI 解析工具的结构化输出
@@ -913,7 +1013,7 @@ UI 侧聚焦建议直接走组件事件：`MonitorPanel` 发出 `focus(sessionId
 
 ### 7.2 挑战：大量输出导致性能问题
 **解决方案**:
-- 使用滑动窗口缓冲（只保留最近 1000 行）
+- 使用滑动窗口缓冲（只保留最近 N 行，默认 `maxLastLines=20`）
 - 异步处理输出数据，避免阻塞主线程
 - 使用 Web Worker 进行模式匹配
 
@@ -944,7 +1044,7 @@ UI 侧聚焦建议直接走组件事件：`MonitorPanel` 发出 `focus(sessionId
 
 ## 八、实施步骤
 
-1. **第一阶段**: 实现基础监控服务和数据收集
+1. **第一阶段**: 实现基础视图服务和数据收集
 2. **第二阶段**: 开发缩略图 UI 组件
 3. **第三阶段**: 集成到现有 PTY 管理器
 4. **第四阶段**: 添加完成检测逻辑
@@ -963,7 +1063,7 @@ UI 侧聚焦建议直接走组件事件：`MonitorPanel` 发出 `focus(sessionId
 
 **可行性**: ✅ 高度可行
 
-通过监控进程状态、输出流和特定模式，可以有效监测三种 Shell 类型的执行状态。虽然无法 100% 准确判断 AI 工具的内部完成状态，但通过综合多个指标可以达到 80-90% 的准确率。
+通过观察进程状态、输出流和特定模式，可以有效监测三种 Shell 类型的执行状态。虽然无法 100% 准确判断 AI 工具的内部完成状态，但通过综合多个指标可以达到 80-90% 的准确率。
 
 **核心优势**:
 - 实时可视化多个会话状态
@@ -971,7 +1071,7 @@ UI 侧聚焦建议直接走组件事件：`MonitorPanel` 发出 `focus(sessionId
 - 提升多任务管理效率
 
 **建议优先级**:
-1. 基础状态监控（进程、输出）
+1. 基础状态观察（进程、输出）
 2. 缩略图 UI 实现
 3. 完成检测逻辑
 4. 通知和日志功能

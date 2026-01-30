@@ -6,7 +6,46 @@ export default {
   menu: {
     settings: 'Settings',
     manageTemplates: 'Manage templates',
-    language: 'Language'
+    language: 'Language',
+    modeShell: 'Shell',
+    modeMonitor: 'View',
+    modeRemote: 'Remote'
+  },
+  remote: {
+    title: 'Remote Access',
+    remoteAppEnabled: 'Enable RemoteApp shortcut',
+    clientIdBase64: 'Base64-encode connection name',
+    baseUrl: 'Portal URL (Guacamole)',
+    baseUrlPlaceholder: 'e.g. https://remote.example.com/guacamole/',
+    systemRdpPort: 'System RDP port',
+    systemRdpPortPlaceholder: 'e.g. 3389',
+    systemRdpPortInvalidHint: 'Port must be an integer between 1 and 65535',
+    remoteAppClientId: 'RemoteApp connection name',
+    remoteAppNamePlaceholder: 'e.g. MultipleShell (RemoteApp / 3389 / NLA)',
+    remoteAppAliasLabel: 'RemoteApp alias',
+    vncClientId: 'VNC connection name',
+    vncNamePlaceholder: 'e.g. VNC :1',
+    clientIdPlaceholder: 'e.g. MultipleShell (RemoteApp / 3389 / NLA)',
+    hint: 'Direct link: <PortalURL>/#/client/c/<connectionId> (copy <connectionId> from the browser address bar; enable Base64 if your connection name must be encoded)',
+    openPortal: 'Open portal',
+    openRemoteApp: 'Open RemoteApp',
+    openVnc: 'Open VNC',
+    loadRdpConfig: 'Load RDP config',
+    loading: 'Loading...',
+    loaded: 'Loaded',
+    loadFailed: 'Load failed',
+    notConfigured: 'Set the portal URL in Settings first',
+    remoteAppDisabledHint: 'RemoteApp is disabled in Settings',
+    missingClientIdHint: 'Set the connection name first',
+    copyLink: 'Copy link',
+    copied: 'Copied',
+    copyFailed: 'Copy failed',
+    clearSettings: 'Clear remote settings',
+    clearSettingsConfirm: 'Clear remote settings?',
+    urlInvalidHint: 'Invalid portal URL (must start with http:// or https://)',
+    urlHasSpacesHint: 'Portal URL contains spaces',
+    urlUnsupportedProtocolHint: 'Portal URL must use http:// or https://',
+    urlHttpWarningHint: 'Prefer https:// (current: http://)'
   },
   updates: {
     title: 'Updates',
@@ -120,6 +159,46 @@ export default {
       claudeCode: 'Claude Code',
       codex: 'Codex',
       opencode: 'OpenCode'
+    }
+  },
+  monitor: {
+    title: 'View',
+    open: 'Open terminal',
+    collapse: 'Collapse',
+    expand: 'Expand',
+    emptyTitle: 'No sessions',
+    emptyHint: 'Create a terminal session to see live status here.',
+    snapshotPending: 'Generating snapshot...',
+    settings: {
+      title: 'View Display',
+      modeCard: 'Cards (summary)',
+      modeTerminal: 'Terminal snapshot',
+      hint: 'Terminal snapshots use more resources; keep the default cards mode unless you need it.'
+    },
+    stats: {
+      running: 'Running',
+      completed: 'Completed',
+      stuck: 'Stuck',
+      error: 'Error'
+    },
+    types: {
+      claudeCode: 'Claude Code',
+      codex: 'Codex',
+      opencode: 'OpenCode'
+    },
+    status: {
+      starting: 'Starting',
+      running: 'Running',
+      idle: 'Idle',
+      completed: 'Completed',
+      stuck: 'Stuck',
+      error: 'Error',
+      stopped: 'Stopped'
+    },
+    card: {
+      duration: 'Uptime',
+      sinceActive: 'Idle',
+      lines: 'Lines'
     }
   }
 }

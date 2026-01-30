@@ -4,8 +4,10 @@ const { app } = require('electron')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const shellMonitor = require('./shell-monitor')
 
 const OPENCODE_CONFIG_TEMPLATE = '{\n  "$schema": "https://opencode.ai/config.json",\n  "permission": {\n    "edit": "ask",\n    "bash": "ask",\n    "webfetch": "allow"\n  }\n}\n'
+const PROMPT_MARKER = '__MPS_PROMPT__'
 
 class PTYManager {
   constructor() {
@@ -291,6 +293,7 @@ class PTYManager {
     const profileHome = this.syncCodexProfileFiles(config)
     const codexHome = this.ensureCodexHome(sessionId, config)
     let psArgs = []
+    let psStartupCmd = ''
     if (codexHome) {
       const configId = typeof config?.id === 'string' ? config.id.trim() : ''
       if (configId) {
@@ -320,7 +323,32 @@ class PTYManager {
         `Write-Host "[mps] CODEX_CONFIG_TOML=$env:CODEX_CONFIG_TOML";` +
         `Write-Host "[mps] CODEX_AUTH_JSON=$env:CODEX_AUTH_JSON";` +
         (env.MPS_CODEX_PROFILE_HOME ? `Write-Host "[mps] MPS_CODEX_PROFILE_HOME=$env:MPS_CODEX_PROFILE_HOME";` : '')
-      psArgs = ['-NoExit', '-Command', cmd]
+      psStartupCmd = cmd
+    }
+
+    // Optional but recommended: emit a prompt marker that ShellMonitor can detect reliably.
+    // It tries to keep the terminal UX unchanged by printing the marker, carriage-returning,
+    // and clearing the line before returning the original prompt.
+    const enablePromptMarker = process.env.MPS_DISABLE_PROMPT_MARKER !== '1'
+    if (enablePromptMarker) {
+      const inject =
+        'try{' +
+        'if(-not $global:__MPS_PROMPT_INSTALLED){' +
+        '$global:__MPS_PROMPT_INSTALLED=$true;' +
+        '$global:__MPS_ORIG_PROMPT=$function:prompt;' +
+        'function global:prompt{' +
+        // NOTE: Use [char]27 instead of `e for compatibility with Windows PowerShell 5.1
+        // (which would otherwise render "e[2K" as literal text in the prompt).
+        'try{Write-Host -NoNewline (\"' + PROMPT_MARKER + '`r\" + [char]27 + \"[2K\")}catch{};' +
+        '& $global:__MPS_ORIG_PROMPT' +
+        '}' +
+        '}' +
+        '}catch{}'
+      psStartupCmd = psStartupCmd ? `${psStartupCmd};${inject}` : inject
+    }
+
+    if (psStartupCmd) {
+      psArgs = ['-NoExit', '-Command', psStartupCmd]
     }
     
     const sendToWindow = (channel, payload) => {
@@ -337,13 +365,20 @@ class PTYManager {
       cwd: cwd,
       env: env
     })
+
+    shellMonitor.registerSession(sessionId, type, {
+      configName: typeof config?.name === 'string' ? config.name : '',
+      cwd
+    })
     
     ptyProcess.onData(data => {
       sendToWindow('terminal:data', { sessionId, data })
+      shellMonitor.onData(sessionId, data)
     })
     
     ptyProcess.onExit(({ exitCode }) => {
       sendToWindow('terminal:exit', { sessionId, code: exitCode })
+      shellMonitor.onExit(sessionId, exitCode)
       this.cleanupCodexHome(sessionId)
       this.sessions.delete(sessionId)
     })
@@ -378,10 +413,16 @@ class PTYManager {
     }
 
     this.cleanupCodexHome(sessionId)
+    shellMonitor.unregisterSession(sessionId)
   }
   
   killAllSessions() {
-    this.sessions.forEach(session => session.kill())
+    for (const [sessionId, session] of this.sessions.entries()) {
+      try {
+        session.kill()
+      } catch (_) {}
+      shellMonitor.unregisterSession(sessionId)
+    }
     this.sessions.clear()
     // Best-effort cleanup for any remaining Codex homes.
     for (const sid of Array.from(this.codexTempHomes.keys())) {

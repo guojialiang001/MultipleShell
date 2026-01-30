@@ -1,15 +1,45 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MenuBar from './components/MenuBar.vue'
 import TabBar from './components/TabBar.vue'
 import Terminal from './components/Terminal.vue'
 import ConfigSelector from './components/ConfigSelector.vue'
+import MonitorPanel from './components/MonitorPanel.vue'
+import RemotePanel from './components/RemotePanel.vue'
 
 const { t } = useI18n()
 
+const UI_MODE_STORAGE_KEY = 'mps.uiMode'
+const MONITOR_THUMBNAIL_MODE_KEY = 'mps.monitor.thumbnailMode' // card | terminal
+
+const normalizeMonitorThumbnailMode = (value) => {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === 'terminal') return 'terminal'
+  return 'card'
+}
+
+const readMonitorThumbnailMode = () => {
+  try {
+    return normalizeMonitorThumbnailMode(localStorage.getItem(MONITOR_THUMBNAIL_MODE_KEY))
+  } catch (_) {
+    return 'card'
+  }
+}
+
+const getInitialUiMode = () => {
+  try {
+    const saved = localStorage.getItem(UI_MODE_STORAGE_KEY)
+    if (saved === 'shell' || saved === 'monitor' || saved === 'remote') return saved
+  } catch (_) {}
+  return 'shell'
+}
+
 const tabs = ref([])
 const activeTabId = ref(null)
+const uiMode = ref(getInitialUiMode()) // shell | monitor
+const monitorThumbnailMode = ref(readMonitorThumbnailMode())
+const monitorDockOpen = ref(false)
 const showConfigSelector = ref(false)
 const configSelectorMode = ref('create') // create | manage
 const pendingTabId = ref(null)
@@ -25,6 +55,14 @@ let mediaRecorder = null
 let mediaStream = null
 let recordedChunks = []
 let recordingMimeType = ''
+
+const refreshMonitorThumbnailMode = () => {
+  monitorThumbnailMode.value = readMonitorThumbnailMode()
+}
+
+const handleMonitorSettings = () => {
+  refreshMonitorThumbnailMode()
+}
 
 const VOICE_ARM_DELAY_MS = 1100
 const TRANSCRIPTION_MODEL = 'FunAudioLLM/SenseVoiceSmall'
@@ -150,6 +188,23 @@ const openConfigManager = () => {
   showConfigSelector.value = true
 }
 
+const switchUiMode = (nextMode) => {
+  const normalized = nextMode === 'monitor' ? 'monitor' : nextMode === 'remote' ? 'remote' : 'shell'
+  if (uiMode.value === normalized) return
+  uiMode.value = normalized
+  if (normalized !== 'shell') monitorDockOpen.value = false
+  try {
+    localStorage.setItem(UI_MODE_STORAGE_KEY, normalized)
+  } catch (_) {}
+  if (normalized === 'shell' || (normalized === 'monitor' && monitorThumbnailMode.value === 'terminal')) {
+    nextTick(() => {
+      try {
+        window.dispatchEvent(new Event('resize'))
+      } catch (_) {}
+    })
+  }
+}
+
 const switchConfigMode = (mode) => {
   configSelectorMode.value = mode
   showConfigSelector.value = true
@@ -176,6 +231,9 @@ const closeTab = async (tabId) => {
 }
 
 onMounted(async () => {
+  refreshMonitorThumbnailMode()
+  window.addEventListener('mps:monitor-settings', handleMonitorSettings)
+
   await loadConfigTemplates()
   if (window?.electronAPI?.getDefaultCwd) {
     try {
@@ -197,6 +255,10 @@ onMounted(async () => {
   })
 
   showConfigSelector.value = true
+})
+
+onUnmounted(() => {
+  window.removeEventListener('mps:monitor-settings', handleMonitorSettings)
 })
 
 const clearVoiceTimer = () => {
@@ -486,10 +548,10 @@ const toggleVoiceCapture = () => {
 
 <template>
   <div class="app">
-    <MenuBar @openConfig="openConfigManager" />
+    <MenuBar :mode="uiMode" @changeMode="switchUiMode" @openConfig="openConfigManager" />
 
     <TabBar
-      v-if="tabs.length > 0"
+      v-if="uiMode === 'shell' && tabs.length > 0"
       :tabs="tabs"
       :activeTabId="activeTabId"
       :activeCwd="activeCwd"
@@ -517,38 +579,89 @@ const toggleVoiceCapture = () => {
         </div>
       </Transition>
 
-      <div v-for="tab in tabs" :key="tab.id" v-show="tab.id === activeTabId" class="terminal-wrapper">
-        <Terminal v-if="!tab.pending" :sessionId="tab.id" :isActive="tab.id === activeTabId" />
-      </div>
-
-      <div v-if="tabs.length === 0 && !showConfigSelector" class="empty-state">
-        <div class="empty-card">
-          <div class="empty-icon">⌨️</div>
-          <h2>{{ t('app.noActiveTerminals') }}</h2>
-          <p>{{ t('app.pressCtrlT', { shortcut: 'Ctrl+T' }) }}</p>
-          <button class="primary-btn large-btn" @click="newTab">
-            <span>+</span> {{ t('app.newTerminal') }}
-          </button>
-        </div>
-      </div>
-
-      <div class="voice-bar">
-        <button
-          class="voice-btn"
+      <div
+        class="shell-view"
+        :class="{ 'shell-view--inactive': uiMode !== 'shell' }"
+        v-show="uiMode === 'shell' || (uiMode === 'monitor' && monitorThumbnailMode === 'terminal')"
+      >
+        <div
+          v-for="tab in tabs"
+          :key="tab.id"
+          class="terminal-wrapper"
           :class="{
-            'voice-btn--arming': isVoicePreparing,
-            'voice-btn--recording': isVoiceRecording
+            'terminal-wrapper--active': tab.id === activeTabId,
+            'terminal-wrapper--preview': tab.id !== activeTabId && monitorThumbnailMode === 'terminal'
           }"
-          :disabled="voiceButtonDisabled"
-          @click="toggleVoiceCapture"
+          v-show="tab.id === activeTabId || monitorThumbnailMode === 'terminal'"
         >
-          <span class="voice-indicator" aria-hidden="true"></span>
-          {{ voiceButtonText }}
-        </button>
-        <div class="voice-meta">
-          <span v-if="voiceStatus" class="voice-status">{{ voiceStatus }}</span>
-          <span v-if="voiceError" class="voice-error">{{ voiceError }}</span>
+          <Terminal v-if="!tab.pending" :sessionId="tab.id" :isActive="uiMode === 'shell' && tab.id === activeTabId" />
         </div>
+
+        <button
+          v-if="tabs.length > 0 && !showConfigSelector"
+          class="monitor-dock-toggle"
+          type="button"
+          :class="{ 'monitor-dock-toggle--open': monitorDockOpen }"
+          @click="monitorDockOpen = !monitorDockOpen"
+        >
+          {{ t('menu.modeMonitor') }}
+        </button>
+
+        <MonitorPanel
+          v-if="uiMode === 'shell' && monitorDockOpen && !showConfigSelector"
+          variant="dock"
+          :tabs="tabs"
+          :defaultCwd="defaultCwd"
+          :activeSessionId="activeTabId"
+          @close="monitorDockOpen = false"
+          @focus="activeTabId = $event"
+          @open="(id) => { activeTabId = id; monitorDockOpen = false }"
+        />
+
+        <div v-if="tabs.length === 0 && !showConfigSelector" class="empty-state">
+          <div class="empty-card">
+            <div class="empty-icon">⌨️</div>
+            <h2>{{ t('app.noActiveTerminals') }}</h2>
+            <p>{{ t('app.pressCtrlT', { shortcut: 'Ctrl+T' }) }}</p>
+            <button class="primary-btn large-btn" @click="newTab">
+              <span>+</span> {{ t('app.newTerminal') }}
+            </button>
+          </div>
+        </div>
+
+        <div class="voice-bar">
+          <button
+            class="voice-btn"
+            :class="{
+              'voice-btn--arming': isVoicePreparing,
+              'voice-btn--recording': isVoiceRecording
+            }"
+            :disabled="voiceButtonDisabled"
+            @click="toggleVoiceCapture"
+          >
+            <span class="voice-indicator" aria-hidden="true"></span>
+            {{ voiceButtonText }}
+          </button>
+          <div class="voice-meta">
+            <span v-if="voiceStatus" class="voice-status">{{ voiceStatus }}</span>
+            <span v-if="voiceError" class="voice-error">{{ voiceError }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="monitor-view" v-show="uiMode === 'monitor'">
+        <MonitorPanel
+          variant="page"
+          :tabs="tabs"
+          :defaultCwd="defaultCwd"
+          :activeSessionId="activeTabId"
+          @focus="activeTabId = $event"
+          @open="(id) => { activeTabId = id; switchUiMode('shell') }"
+        />
+      </div>
+
+      <div class="remote-view" v-show="uiMode === 'remote'">
+        <RemotePanel />
       </div>
 
     </div>
@@ -617,11 +730,74 @@ html,
   min-height: 0;
 }
 
+.shell-view,
+.monitor-view,
+.remote-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-view {
+  position: relative;
+}
+
+.shell-view--inactive {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.monitor-view {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+}
+
 .terminal-wrapper {
   flex: 1;
   width: 100%;
   min-height: 0;
   background-color: var(--bg-color);
+}
+
+.terminal-wrapper--preview {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 960px;
+  height: 540px;
+  flex: none;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.monitor-dock-toggle {
+  position: absolute;
+  right: 16px;
+  bottom: 72px;
+  z-index: 1600;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(63, 114, 196, 0.55);
+  background: rgba(63, 114, 196, 0.18);
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(8px);
+}
+
+.monitor-dock-toggle:hover {
+  transform: translateY(-1px);
+  background: rgba(63, 114, 196, 0.24);
+}
+
+.monitor-dock-toggle--open {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
 }
 
 /* Modal Overlay */

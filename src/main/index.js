@@ -1,14 +1,18 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, clipboard, Menu, shell } = require('electron')
 const { autoUpdater } = require('electron-updater')
+const { spawn } = require('child_process')
+const fs = require('fs')
 const path = require('path')
 const configManager = require('./config-manager')
 const draftManager = require('./draft-manager')
 const ptyManager = require('./pty-manager')
+const shellMonitor = require('./shell-monitor')
 const voiceService = require('./voice-service')
 
 
 let mainWindow
 let selectFolderPromise
+let monitorTickInterval = null
 
 const updateState = {
   state: 'idle',
@@ -145,16 +149,31 @@ function createWindow() {
   })
 }
 
+shellMonitor.on('update', (payload) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const contents = mainWindow.webContents
+  if (!contents || contents.isDestroyed()) return
+  contents.send('monitor:update', payload)
+})
+
 app.whenReady().then(() => {
   ptyManager.cleanupOrphanedTempDirs()
   configManager.loadConfigs()
   Menu.setApplicationMenu(null)
   createWindow()
   initAutoUpdater()
+
+  monitorTickInterval = setInterval(() => {
+    shellMonitor.tick()
+  }, 1000)
 })
 
 app.on('window-all-closed', () => {
   ptyManager.killAllSessions()
+  if (monitorTickInterval) {
+    clearInterval(monitorTickInterval)
+    monitorTickInterval = null
+  }
   if (process.platform !== 'darwin') app.quit()
 })
 
@@ -184,6 +203,7 @@ ipcMain.handle('write-terminal', (event, sessionId, data) => {
   if (data.length > 1024 * 1024) {
     throw new Error('Data too large')
   }
+  shellMonitor.onUserInput(sessionId, data)
   ptyManager.writeToSession(sessionId, data)
 })
 
@@ -203,6 +223,8 @@ ipcMain.handle('resize-terminal', (event, sessionId, cols, rows) => {
 ipcMain.handle('kill-terminal', (event, sessionId) => {
   ptyManager.killSession(sessionId)
 })
+
+ipcMain.handle('monitor:getStates', () => shellMonitor.getAllStates())
 
 const FORBIDDEN_PATHS = [
   'C:\\Windows\\System32',
@@ -286,6 +308,191 @@ ipcMain.handle('clipboard:writeText', (event, text) => {
 
 ipcMain.handle('clipboard:readText', () => {
   return clipboard.readText()
+})
+
+ipcMain.handle('shell:openExternal', async (event, url) => {
+  if (typeof url !== 'string' || !url.trim()) {
+    throw new Error('Invalid url')
+  }
+  if (url.length > 4096) {
+    throw new Error('URL too long')
+  }
+
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch (_) {
+    throw new Error('Invalid URL')
+  }
+
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('Unsupported protocol')
+  }
+
+  await shell.openExternal(url)
+  return true
+  })
+
+const runPowerShell = (scriptText) =>
+  new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', scriptText], {
+      windowsHide: true
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+    child.on('error', (err) => reject(err))
+    child.on('close', (code) => {
+      if (code === 0) return resolve({ stdout, stderr })
+      const message = (stderr || stdout || '').trim() || `PowerShell exited with code ${code}`
+      const err = new Error(message)
+      err.code = code
+      err.stdout = stdout
+      err.stderr = stderr
+      reject(err)
+    })
+  })
+
+const resolveRemoteAppExePath = () => {
+  const override = String(process.env.MPS_REMOTEAPP_EXE_PATH ?? '').trim()
+  if (override) {
+    if (!fs.existsSync(override)) {
+      throw new Error(`MPS_REMOTEAPP_EXE_PATH not found: ${override}`)
+    }
+    return override
+  }
+
+  const currentExe = String(app.getPath('exe') ?? '').trim()
+
+  // Packaged app: use the real installed executable path.
+  if (app.isPackaged) return currentExe
+
+  // Dev mode: avoid registering "electron.exe", which will show "electron.exe path-to-app".
+  const exeName = path.basename(currentExe).toLowerCase()
+  if (exeName !== 'electron.exe') return currentExe
+
+  const repoRoot = path.resolve(__dirname, '../..')
+  const productExe = 'MultipleShell.exe'
+
+  const candidates = []
+
+  // 1) Prefer the unpacked build output when developing (matches the current repo code/version).
+  const archFolder = process.arch === 'ia32' ? 'ia32' : process.arch === 'arm64' ? 'arm64' : 'x64'
+  candidates.push(path.join(repoRoot, 'release', archFolder, 'win-unpacked', productExe))
+
+  try {
+    const releaseDir = path.join(repoRoot, 'release')
+    const entries = fs.readdirSync(releaseDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      candidates.push(path.join(releaseDir, entry.name, 'win-unpacked', productExe))
+    }
+  } catch (_) {}
+
+  // 2) Fall back to common install locations (in case you're running dev but have installed the app).
+  const localAppData = String(process.env.LOCALAPPDATA ?? '').trim()
+  if (localAppData) {
+    candidates.push(path.join(localAppData, 'Programs', 'MultipleShell', productExe))
+  }
+
+  const programFiles = String(process.env.ProgramFiles ?? '').trim()
+  if (programFiles) {
+    candidates.push(path.join(programFiles, 'MultipleShell', productExe))
+  }
+
+  const programFilesX86 = String(process.env['ProgramFiles(x86)'] ?? '').trim()
+  if (programFilesX86) {
+    candidates.push(path.join(programFilesX86, 'MultipleShell', productExe))
+  }
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate
+  }
+
+  throw new Error(
+    'Cannot resolve MultipleShell.exe for RemoteApp registration. Build (release/*/win-unpacked), install the app, or set MPS_REMOTEAPP_EXE_PATH.'
+  )
+}
+
+ipcMain.handle('remote:applyRdpConfig', async (event, payload) => {
+  if (process.platform !== 'win32') {
+    throw new Error('RDP config is only supported on Windows')
+  }
+
+  const port = Number.parseInt(String(payload?.systemRdpPort ?? ''), 10)
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    throw new Error('Invalid systemRdpPort')
+  }
+
+  const remoteAppAlias = 'MultipleShell'
+  const exePath = resolveRemoteAppExePath()
+  const psPayload = { port, alias: remoteAppAlias, exePath }
+  const psJson = JSON.stringify(psPayload).replace(/'/g, "''")
+
+  const script = `
+$ErrorActionPreference = "Stop"
+$payload = '${psJson}' | ConvertFrom-Json
+$port = [int]$payload.port
+$alias = [string]$payload.alias
+$exePath = [string]$payload.exePath
+
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "Run MultipleShell as Administrator to apply RDP config."
+}
+
+function Set-RegistryDword {
+  Param([string]$Path,[string]$Name,[int]$Value)
+  New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
+}
+
+function Set-RegistryString {
+  Param([string]$Path,[string]$Name,[string]$Value)
+  New-ItemProperty -Path $Path -Name $Name -PropertyType String -Value $Value -Force | Out-Null
+}
+
+# Enable RDP + NLA
+Set-RegistryDword -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" -Name "fDenyTSConnections" -Value 0
+Set-RegistryDword -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" -Name "UserAuthentication" -Value 1
+
+# Windows Firewall: inbound TCP
+if (Get-Command New-NetFirewallRule -ErrorAction SilentlyContinue) {
+  $ruleName = "MultipleShell-RDP-" + $port
+  $existing = Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
+  if (-not $existing) {
+    New-NetFirewallRule -Name $ruleName -DisplayName ("MultipleShell RDP (TCP " + $port + ")") -Direction Inbound -Action Allow -Enabled True -Protocol TCP -LocalPort $port -Profile Any | Out-Null
+  }
+}
+
+# RemoteApp allow list (mstsc: remoteapplicationprogram:s:||<alias>)
+$base = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Terminal Server\\TSAppAllowList"
+if (-not (Test-Path -LiteralPath $base)) { New-Item -Path $base -Force | Out-Null }
+Set-RegistryDword -Path $base -Name "fDisabledAllowList" -Value 0
+
+$appsKey = Join-Path $base "Applications"
+if (-not (Test-Path -LiteralPath $appsKey)) { New-Item -Path $appsKey -Force | Out-Null }
+
+$appKey = Join-Path $appsKey $alias
+if (-not (Test-Path -LiteralPath $appKey)) { New-Item -Path $appKey -Force | Out-Null }
+
+Set-RegistryString -Path $appKey -Name "Name" -Value $alias
+Set-RegistryString -Path $appKey -Name "Path" -Value $exePath
+Set-RegistryString -Path $appKey -Name "IconPath" -Value $exePath
+Set-RegistryDword -Path $appKey -Name "IconIndex" -Value 0
+Set-RegistryDword -Path $appKey -Name "ShowInTSWA" -Value 1
+Set-RegistryDword -Path $appKey -Name "CommandLineSetting" -Value 0
+Set-RegistryString -Path $appKey -Name "RequiredCommandLine" -Value ""
+`
+
+  await runPowerShell(script)
+  return { ok: true, port, alias: remoteAppAlias, exePath }
 })
 
 ipcMain.handle('draft:load', (event, key) => {
