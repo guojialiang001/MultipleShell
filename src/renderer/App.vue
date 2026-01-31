@@ -43,6 +43,7 @@ const monitorDockOpen = ref(false)
 const showConfigSelector = ref(false)
 const configSelectorMode = ref('create') // create | manage
 const pendingTabId = ref(null)
+const pendingCreatedSessionId = ref(null)
 const configTemplates = ref([])
 const defaultCwd = ref('')
 const isVoicePreparing = ref(false)
@@ -55,6 +56,7 @@ let mediaRecorder = null
 let mediaStream = null
 let recordedChunks = []
 let recordingMimeType = ''
+let unsubscribeSessionsChanged = null
 
 const refreshMonitorThumbnailMode = () => {
   monitorThumbnailMode.value = readMonitorThumbnailMode()
@@ -111,6 +113,42 @@ const closeConfigSelector = () => {
       // 如果pending标签页不是当前活跃的，那么activeTabId.value保持不变，不影响用户当前正在使用的标签页
     }
     pendingTabId.value = null
+    pendingCreatedSessionId.value = null
+  }
+}
+
+const normalizeSessionTabs = (sessions) => {
+  const list = Array.isArray(sessions) ? sessions : []
+  return list.map((s) => ({
+    id: s?.sessionId,
+    title: s?.title || s?.config?.name || '',
+    config: s?.config || {},
+    workingDir: s?.workingDir || ''
+  })).filter((t) => typeof t.id === 'string' && t.id.trim())
+}
+
+const applySessionsToTabs = (sessions) => {
+  const sessionTabs = normalizeSessionTabs(sessions)
+  const pendingTabs = tabs.value.filter((t) => t && t.pending)
+
+  // Keep session tabs as source of truth; keep local pending placeholders for UX.
+  tabs.value = [...sessionTabs, ...pendingTabs]
+
+  // Resolve "pending -> created session" once the Host reports the new session.
+  if (pendingTabId.value && pendingCreatedSessionId.value) {
+    const sid = pendingCreatedSessionId.value
+    if (sessionTabs.some((t) => t.id === sid)) {
+      tabs.value = tabs.value.filter((t) => !t.pending)
+      activeTabId.value = sid
+      pendingTabId.value = null
+      pendingCreatedSessionId.value = null
+    }
+  }
+
+  const hasActive = tabs.value.some((t) => t.id === activeTabId.value)
+  if (!hasActive) {
+    const firstSession = sessionTabs[0]
+    activeTabId.value = firstSession ? firstSession.id : (pendingTabs[0]?.id || null)
   }
 }
 
@@ -119,29 +157,25 @@ const createTab = async (config, workingDir) => {
     try { return structuredClone(config) } catch (_) { return JSON.parse(JSON.stringify(config)) }
   })()
 
-  const sessionId = await window.electronAPI.createTerminal(plainConfig, workingDir)
-  if (pendingTabId.value) {
-    const index = tabs.value.findIndex(t => t.id === pendingTabId.value)
-    if (index !== -1) {
-      tabs.value[index] = {
-        id: sessionId,
-        title: plainConfig.name,
-        config: { ...plainConfig },
-        workingDir: workingDir || ''
-      }
-      activeTabId.value = sessionId
-    }
-    pendingTabId.value = null
-  } else {
-    tabs.value.push({
-      id: sessionId,
-      title: plainConfig.name,
-      config: { ...plainConfig },
-      workingDir: workingDir || ''
-    })
-    activeTabId.value = sessionId
+  // Ensure we have a local placeholder while the Host creates the real session.
+  if (!pendingTabId.value) {
+    const tempId = `pending-${Date.now()}`
+    tabs.value.push({ id: tempId, titleKey: 'tabs.newTabPlaceholder', pending: true })
+    activeTabId.value = tempId
+    pendingTabId.value = tempId
   }
+
+  const sessionId = await window.electronAPI.createTerminal(plainConfig, workingDir)
+  pendingCreatedSessionId.value = sessionId
   showConfigSelector.value = false
+
+  // Best-effort refresh in case sessions:changed arrives before our listener is ready.
+  if (window?.electronAPI?.sessionsList) {
+    try {
+      const sessions = await window.electronAPI.sessionsList()
+      applySessionsToTabs(sessions)
+    } catch (_) {}
+  }
 }
 
 const updateTabConfig = (config) => {
@@ -216,6 +250,7 @@ const closeTab = async (tabId) => {
     const index = tabs.value.findIndex(t => t.id === tabId)
     if (index !== -1) tabs.value.splice(index, 1)
     if (pendingTabId.value === tabId) pendingTabId.value = null
+    if (pendingTabId.value === null) pendingCreatedSessionId.value = null
     showConfigSelector.value = false
     if (activeTabId.value === tabId) {
       activeTabId.value = tabs.value.length > 0 ? tabs.value[0].id : null
@@ -223,10 +258,11 @@ const closeTab = async (tabId) => {
     return
   }
   await window.electronAPI.killTerminal(tabId)
-  const index = tabs.value.findIndex(t => t.id === tabId)
-  if (index !== -1) tabs.value.splice(index, 1)
-  if (activeTabId.value === tabId) {
-    activeTabId.value = tabs.value.length > 0 ? tabs.value[0].id : null
+  if (window?.electronAPI?.sessionsList) {
+    try {
+      const sessions = await window.electronAPI.sessionsList()
+      applySessionsToTabs(sessions)
+    } catch (_) {}
   }
 }
 
@@ -254,11 +290,31 @@ onMounted(async () => {
     }
   })
 
-  showConfigSelector.value = true
+  if (window?.electronAPI?.onSessionsChanged) {
+    unsubscribeSessionsChanged = window.electronAPI.onSessionsChanged((sessions) => {
+      applySessionsToTabs(sessions)
+    })
+  }
+
+  if (window?.electronAPI?.sessionsList) {
+    try {
+      const sessions = await window.electronAPI.sessionsList()
+      applySessionsToTabs(sessions)
+    } catch (_) {}
+  }
+
+  // Default UX: show config selector only when there are no running sessions.
+  if (tabs.value.filter((t) => !t.pending).length === 0) {
+    showConfigSelector.value = true
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('mps:monitor-settings', handleMonitorSettings)
+  if (unsubscribeSessionsChanged) {
+    unsubscribeSessionsChanged()
+    unsubscribeSessionsChanged = null
+  }
 })
 
 const clearVoiceTimer = () => {

@@ -1,18 +1,24 @@
 const { app, BrowserWindow, ipcMain, dialog, clipboard, Menu, shell } = require('electron')
-const { autoUpdater } = require('electron-updater')
 const { spawn } = require('child_process')
 const fs = require('fs')
+const https = require('https')
+const os = require('os')
 const path = require('path')
+const builtInConfig = require('./built-in-config-manager')
 const configManager = require('./config-manager')
 const draftManager = require('./draft-manager')
 const ptyManager = require('./pty-manager')
 const shellMonitor = require('./shell-monitor')
-const voiceService = require('./voice-service')
+const { initAgent } = require('./agent')
 
 
 let mainWindow
 let selectFolderPromise
 let monitorTickInterval = null
+let agent = null
+let agentInitPromise = null
+let clientUserDataDir = null
+let autoUpdater = null
 
 const updateState = {
   state: 'idle',
@@ -23,10 +29,24 @@ const updateState = {
 let updaterReady = false
 let updateInterval = null
 
+const getAutoUpdater = () => {
+  if (autoUpdater) return autoUpdater
+  try {
+    ;({ autoUpdater } = require('electron-updater'))
+    return autoUpdater
+  } catch (err) {
+    console.warn('[mps] Failed to load electron-updater:', err)
+    return null
+  }
+}
+
 const pushUpdateState = (patch = {}) => {
   Object.assign(updateState, patch)
   if (mainWindow && mainWindow.webContents) {
     mainWindow.webContents.send('update:status', updateState)
+  }
+  if (agent && agent.role === 'host' && typeof agent.broadcast === 'function') {
+    agent.broadcast('update.status', updateState)
   }
 }
 
@@ -44,43 +64,156 @@ const initAutoUpdater = () => {
     return
   }
 
-  updaterReady = true
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
-  autoUpdater.setFeedURL({ provider: 'generic', url: updateUrl })
+  const updater = getAutoUpdater()
+  if (!updater) {
+    pushUpdateState({ state: 'disabled', error: 'electron-updater unavailable' })
+    return
+  }
 
-  autoUpdater.on('checking-for-update', () => {
+  updaterReady = true
+  updater.autoDownload = true
+  updater.autoInstallOnAppQuit = true
+  updater.setFeedURL({ provider: 'generic', url: updateUrl })
+
+  updater.on('checking-for-update', () => {
     pushUpdateState({ state: 'checking', error: null })
   })
 
-  autoUpdater.on('update-available', (info) => {
+  updater.on('update-available', (info) => {
     pushUpdateState({ state: 'available', version: info?.version || null, error: null })
   })
 
-  autoUpdater.on('update-not-available', () => {
+  updater.on('update-not-available', () => {
     pushUpdateState({ state: 'not-available', error: null })
   })
 
-  autoUpdater.on('download-progress', (progress) => {
+  updater.on('download-progress', (progress) => {
     const percent = Math.round(progress?.percent || 0)
     pushUpdateState({ state: 'downloading', progress: percent, error: null })
   })
 
-  autoUpdater.on('update-downloaded', (info) => {
+  updater.on('update-downloaded', (info) => {
     pushUpdateState({ state: 'downloaded', version: info?.version || null, error: null })
   })
 
-  autoUpdater.on('error', (err) => {
+  updater.on('error', (err) => {
     pushUpdateState({ state: 'error', error: err?.message || String(err) })
   })
 
-  autoUpdater.checkForUpdates().catch((err) => {
+  updater.checkForUpdates().catch((err) => {
     pushUpdateState({ state: 'error', error: err?.message || String(err) })
   })
 
   updateInterval = setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {})
+    updater.checkForUpdates().catch(() => {})
   }, 6 * 60 * 60 * 1000)
+}
+
+const ensureClientUserData = () => {
+  const base =
+    String(process.env.LOCALAPPDATA || '').trim() ||
+    (() => {
+      try {
+        return app.getPath('temp')
+      } catch (_) {
+        return ''
+      }
+    })() ||
+    os.tmpdir()
+
+  const dir = path.join(base, 'MultipleShell', 'clients', String(process.pid))
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch (_) {}
+
+  try {
+    app.setPath('userData', dir)
+  } catch (err) {
+    console.warn('[mps] Failed to set client userData:', err)
+  }
+
+  return dir
+}
+
+const initAgentEarly = () => {
+  if (agentInitPromise) return agentInitPromise
+  agentInitPromise = (async () => {
+    try {
+      const instance = await initAgent()
+      if (instance.role === 'client') {
+        clientUserDataDir = ensureClientUserData()
+      }
+      agent = instance
+      return instance
+    } catch (err) {
+      console.warn('[mps] initAgent failed, falling back to standalone host mode:', err)
+      agent = { role: 'host', broadcast: () => {}, setRequestHandler: () => {}, onNotification: () => {} }
+      return agent
+    }
+  })()
+  return agentInitPromise
+}
+
+const transcribeAudio = async ({ audioData, format = 'webm' }) => {
+  if (!audioData) {
+    throw new Error('Invalid audioData')
+  }
+  if (format && !/^[a-z0-9]+$/.test(format)) {
+    throw new Error('Invalid format')
+  }
+
+  const apiKey = builtInConfig.getVoiceApiKey()
+  if (!apiKey) {
+    throw new Error('API密钥未配置')
+  }
+
+  const buffer = Buffer.isBuffer(audioData)
+    ? audioData
+    : Array.isArray(audioData)
+    ? Buffer.from(audioData)
+    : Buffer.from(audioData)
+
+  const boundary = '----' + Math.random().toString(36).substring(2)
+  const parts = [
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.${format}"\r\nContent-Type: audio/${format}\r\n\r\n`
+    ),
+    buffer,
+    Buffer.from(
+      `\r\n--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nFunAudioLLM/SenseVoiceSmall\r\n--${boundary}--\r\n`
+    )
+  ]
+  const body = Buffer.concat(parts)
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'api.siliconflow.cn',
+        path: '/v1/audio/transcriptions',
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length
+        }
+      },
+      (res) => {
+        let data = ''
+        res.on('data', (chunk) => (data += chunk))
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data)
+            res.statusCode === 200 ? resolve(parsed) : reject(new Error(parsed.message || data))
+          } catch {
+            reject(new Error(data))
+          }
+        })
+      }
+    )
+    req.on('error', reject)
+    req.write(body)
+    req.end()
+  })
 }
 
 function createWindow() {
@@ -149,39 +282,230 @@ function createWindow() {
   })
 }
 
-shellMonitor.on('update', (payload) => {
+const sendToRenderer = (channel, payload) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const contents = mainWindow.webContents
   if (!contents || contents.isDestroyed()) return
-  contents.send('monitor:update', payload)
+  contents.send(channel, payload)
+}
+
+const sessionRegistry = new Map()
+const getSessionsList = () =>
+  Array.from(sessionRegistry.values()).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+
+const broadcastSessionsChanged = () => {
+  const list = getSessionsList()
+  sendToRenderer('sessions:changed', list)
+  if (agent && agent.role === 'host') {
+    agent.broadcast('sessions.changed', list)
+  }
+}
+
+const forwardHostNotification = (method, params) => {
+  if (method === 'terminal.data') return sendToRenderer('terminal:data', params)
+  if (method === 'terminal.exit') return sendToRenderer('terminal:exit', params)
+  if (method === 'sessions.changed') return sendToRenderer('sessions:changed', params)
+  if (method === 'monitor.update') return sendToRenderer('monitor:update', params)
+  if (method === 'update.status') return sendToRenderer('update:status', params)
+}
+
+const sendFromHostPty = (channel, payload) => {
+  // Host instance also has a local UI.
+  sendToRenderer(channel, payload)
+
+  if (agent && agent.role === 'host') {
+    if (channel === 'terminal:data') agent.broadcast('terminal.data', payload)
+    if (channel === 'terminal:exit') agent.broadcast('terminal.exit', payload)
+  }
+
+  if (channel === 'terminal:exit') {
+    const sid = payload?.sessionId
+    if (typeof sid === 'string' && sid) {
+      if (sessionRegistry.delete(sid)) broadcastSessionsChanged()
+    }
+  }
+}
+
+shellMonitor.on('update', (payload) => {
+  sendToRenderer('monitor:update', payload)
+  if (agent && agent.role === 'host') {
+    agent.broadcast('monitor.update', payload)
+  }
 })
 
-app.whenReady().then(() => {
-  ptyManager.cleanupOrphanedTempDirs()
-  configManager.loadConfigs()
+// Phase 4: elect Host/Client role before app.whenReady() so a Client can switch its Chromium
+// profile directory early (avoids concurrent access to the Host profile).
+initAgentEarly().catch(() => {})
+
+app.whenReady().then(async () => {
+  await initAgentEarly()
+
+  if (agent.role === 'host' && typeof agent.setRequestHandler === 'function') {
+    agent.setRequestHandler(async (method, params) => {
+      if (method === 'terminal.create') {
+        const config = params?.config
+        const workingDir = typeof params?.workingDir === 'string' ? params.workingDir : ''
+        if (!config || typeof config !== 'object') throw new Error('Invalid config')
+
+        const sessionId = ptyManager.createSession(config, workingDir, sendFromHostPty)
+        sessionRegistry.set(sessionId, {
+          sessionId,
+          title: typeof config?.name === 'string' ? config.name : 'Unnamed',
+          config: {
+            id: typeof config?.id === 'string' ? config.id : '',
+            type: typeof config?.type === 'string' ? config.type : '',
+            name: typeof config?.name === 'string' ? config.name : ''
+          },
+          workingDir: workingDir || '',
+          createdAt: new Date().toISOString()
+        })
+        broadcastSessionsChanged()
+        return sessionId
+      }
+
+      if (method === 'terminal.write') {
+        const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
+        const data = typeof params?.data === 'string' ? params.data : ''
+        if (!sessionId.trim()) throw new Error('Invalid sessionId')
+        if (data.length > 1024 * 1024) throw new Error('Data too large')
+        shellMonitor.onUserInput(sessionId, data)
+        ptyManager.writeToSession(sessionId, data)
+        return true
+      }
+
+      if (method === 'terminal.resize') {
+        const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
+        const cols = params?.cols
+        const rows = params?.rows
+        if (!sessionId.trim()) throw new Error('Invalid sessionId')
+        if (!Number.isInteger(cols) || cols < 1 || cols > 1000) throw new Error('Invalid cols')
+        if (!Number.isInteger(rows) || rows < 1 || rows > 1000) throw new Error('Invalid rows')
+        ptyManager.resizeSession(sessionId, cols, rows)
+        return true
+      }
+
+      if (method === 'terminal.kill') {
+        const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
+        if (!sessionId.trim()) throw new Error('Invalid sessionId')
+        ptyManager.killSession(sessionId)
+        if (sessionRegistry.delete(sessionId)) broadcastSessionsChanged()
+        return true
+      }
+
+      if (method === 'sessions.list') return getSessionsList()
+      if (method === 'monitor.getStates') return shellMonitor.getAllStates()
+
+      if (method === 'configs.list') return configManager.loadConfigs()
+      if (method === 'configs.save') {
+        const config = params?.config
+        if (!config || typeof config !== 'object') throw new Error('Invalid config')
+        return configManager.saveConfig(config)
+      }
+      if (method === 'configs.delete') {
+        const configId = typeof params?.configId === 'string' ? params.configId : ''
+        if (!configId.trim()) throw new Error('Invalid configId')
+        return configManager.deleteConfig(configId)
+      }
+
+      if (method === 'drafts.load') return draftManager.loadDraft(params?.key)
+      if (method === 'drafts.save') return draftManager.saveDraft(params?.key, params?.value)
+      if (method === 'drafts.delete') return draftManager.deleteDraft(params?.key)
+
+      if (method === 'update.getStatus') return updateState
+      if (method === 'update.check') {
+        const updater = getAutoUpdater()
+        if (!updaterReady) return updateState
+        if (!updater) return updateState
+        try {
+          await updater.checkForUpdates()
+        } catch (err) {
+          pushUpdateState({ state: 'error', error: err?.message || String(err) })
+        }
+        return updateState
+      }
+      if (method === 'update.quitAndInstall') {
+        const updater = getAutoUpdater()
+        if (!updaterReady) return false
+        if (!updater) return false
+        updater.quitAndInstall()
+        return true
+      }
+
+      if (method === 'voice.getApiKey') return builtInConfig.getVoiceApiKey()
+      if (method === 'voice.setApiKey') {
+        const key = params?.key
+        if (typeof key !== 'string') throw new Error('Invalid API key')
+        builtInConfig.setVoiceApiKey(key)
+        return { success: true }
+      }
+      if (method === 'voice.transcribe') {
+        return transcribeAudio(params || {})
+      }
+
+      if (method === 'remote.applyRdpConfig') {
+        return applyRdpConfig(params || {})
+      }
+
+      throw new Error(`Unknown method: ${method}`)
+    })
+  }
+  if (agent.role === 'client') {
+    agent.onNotification((method, params) => forwardHostNotification(method, params))
+  }
+
+  // Only the Host process should touch shared temp dirs (e.g. Codex CODEX_HOME staging)
+  // otherwise a Client could delete directories still in use by the Host.
+  if (agent.role === 'host') {
+    ptyManager.cleanupOrphanedTempDirs()
+  }
+
+  if (agent.role === 'host') {
+    configManager.loadConfigs()
+  }
   Menu.setApplicationMenu(null)
   createWindow()
-  initAutoUpdater()
 
-  monitorTickInterval = setInterval(() => {
-    shellMonitor.tick()
-  }, 1000)
+  // When running multi-instance, only Host should perform "side-effect" background work.
+  if (agent.role === 'host') {
+    initAutoUpdater()
+    monitorTickInterval = setInterval(() => {
+      shellMonitor.tick()
+    }, 1000)
+  }
+
+  // Send initial sessions list to renderer (Host has state; Client will call sessions:list).
+  if (agent.role === 'host') {
+    broadcastSessionsChanged()
+  }
 })
 
 app.on('window-all-closed', () => {
-  ptyManager.killAllSessions()
-  if (monitorTickInterval) {
-    clearInterval(monitorTickInterval)
-    monitorTickInterval = null
+  if (agent && agent.role === 'host') {
+    ptyManager.killAllSessions()
+    sessionRegistry.clear()
+    broadcastSessionsChanged()
+    if (monitorTickInterval) {
+      clearInterval(monitorTickInterval)
+      monitorTickInterval = null
+    }
   }
   if (process.platform !== 'darwin') app.quit()
 })
 
-ipcMain.handle('get-configs', () => configManager.loadConfigs())
+ipcMain.handle('get-configs', () => {
+  if (agent && agent.role === 'client') return agent.call('configs.list', {})
+  return configManager.loadConfigs()
+})
 
-ipcMain.handle('save-config', (event, config) => configManager.saveConfig(config))
+ipcMain.handle('save-config', (event, config) => {
+  if (agent && agent.role === 'client') return agent.call('configs.save', { config })
+  return configManager.saveConfig(config)
+})
 
-ipcMain.handle('delete-config', (event, configId) => configManager.deleteConfig(configId))
+ipcMain.handle('delete-config', (event, configId) => {
+  if (agent && agent.role === 'client') return agent.call('configs.delete', { configId })
+  return configManager.deleteConfig(configId)
+})
 
 ipcMain.handle('create-terminal', (event, config, workingDir) => {
   if (!config || typeof config !== 'object') {
@@ -190,7 +514,25 @@ ipcMain.handle('create-terminal', (event, config, workingDir) => {
   if (workingDir && typeof workingDir !== 'string') {
     throw new Error('Invalid workingDir')
   }
-  return ptyManager.createSession(config, workingDir, mainWindow)
+
+  if (agent && agent.role === 'client') {
+    return agent.call('terminal.create', { config, workingDir: workingDir || '' })
+  }
+
+  const sessionId = ptyManager.createSession(config, workingDir, sendFromHostPty)
+  sessionRegistry.set(sessionId, {
+    sessionId,
+    title: typeof config?.name === 'string' ? config.name : 'Unnamed',
+    config: {
+      id: typeof config?.id === 'string' ? config.id : '',
+      type: typeof config?.type === 'string' ? config.type : '',
+      name: typeof config?.name === 'string' ? config.name : ''
+    },
+    workingDir: workingDir || '',
+    createdAt: new Date().toISOString()
+  })
+  broadcastSessionsChanged()
+  return sessionId
 })
 
 ipcMain.handle('write-terminal', (event, sessionId, data) => {
@@ -203,6 +545,11 @@ ipcMain.handle('write-terminal', (event, sessionId, data) => {
   if (data.length > 1024 * 1024) {
     throw new Error('Data too large')
   }
+
+  if (agent && agent.role === 'client') {
+    return agent.call('terminal.write', { sessionId, data })
+  }
+
   shellMonitor.onUserInput(sessionId, data)
   ptyManager.writeToSession(sessionId, data)
 })
@@ -217,14 +564,36 @@ ipcMain.handle('resize-terminal', (event, sessionId, cols, rows) => {
   if (!Number.isInteger(rows) || rows < 1 || rows > 1000) {
     throw new Error('Invalid rows')
   }
+
+  if (agent && agent.role === 'client') {
+    return agent.call('terminal.resize', { sessionId, cols, rows })
+  }
+
   ptyManager.resizeSession(sessionId, cols, rows)
 })
 
 ipcMain.handle('kill-terminal', (event, sessionId) => {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) {
+    throw new Error('Invalid sessionId')
+  }
+
+  if (agent && agent.role === 'client') {
+    return agent.call('terminal.kill', { sessionId })
+  }
+
   ptyManager.killSession(sessionId)
+  if (sessionRegistry.delete(sessionId)) broadcastSessionsChanged()
 })
 
-ipcMain.handle('monitor:getStates', () => shellMonitor.getAllStates())
+ipcMain.handle('monitor:getStates', () => {
+  if (agent && agent.role === 'client') return agent.call('monitor.getStates', {})
+  return shellMonitor.getAllStates()
+})
+
+ipcMain.handle('sessions:list', () => {
+  if (agent && agent.role === 'client') return agent.call('sessions.list', {})
+  return getSessionsList()
+})
 
 const FORBIDDEN_PATHS = [
   'C:\\Windows\\System32',
@@ -269,12 +638,18 @@ ipcMain.handle('get-default-cwd', () => {
 
 ipcMain.handle('app:getVersion', () => app.getVersion())
 
-ipcMain.handle('update:getStatus', () => updateState)
+ipcMain.handle('update:getStatus', () => {
+  if (agent && agent.role === 'client') return agent.call('update.getStatus', {})
+  return updateState
+})
 
 ipcMain.handle('update:check', async () => {
+  if (agent && agent.role === 'client') return agent.call('update.check', {})
   if (!updaterReady) return updateState
+  const updater = getAutoUpdater()
+  if (!updater) return updateState
   try {
-    await autoUpdater.checkForUpdates()
+    await updater.checkForUpdates()
   } catch (err) {
     pushUpdateState({ state: 'error', error: err?.message || String(err) })
   }
@@ -282,9 +657,31 @@ ipcMain.handle('update:check', async () => {
 })
 
 ipcMain.handle('update:quitAndInstall', () => {
+  if (agent && agent.role === 'client') return agent.call('update.quitAndInstall', {})
   if (!updaterReady) return false
-  autoUpdater.quitAndInstall()
+  const updater = getAutoUpdater()
+  if (!updater) return false
+  updater.quitAndInstall()
   return true
+})
+
+ipcMain.handle('voice:getApiKey', () => {
+  if (agent && agent.role === 'client') return agent.call('voice.getApiKey', {})
+  return builtInConfig.getVoiceApiKey()
+})
+
+ipcMain.handle('voice:setApiKey', (_, key) => {
+  if (agent && agent.role === 'client') return agent.call('voice.setApiKey', { key })
+  if (typeof key !== 'string') {
+    throw new Error('Invalid API key')
+  }
+  builtInConfig.setVoiceApiKey(key)
+  return { success: true }
+})
+
+ipcMain.handle('voice:transcribe', async (_, payload) => {
+  if (agent && agent.role === 'client') return agent.call('voice.transcribe', payload || {})
+  return transcribeAudio(payload || {})
 })
 
 ipcMain.handle('window:minimize', () => {
@@ -421,7 +818,43 @@ const resolveRemoteAppExePath = () => {
   )
 }
 
-ipcMain.handle('remote:applyRdpConfig', async (event, payload) => {
+ipcMain.handle('app:getInstanceCount', async () => {
+  if (process.platform !== 'win32') return 1
+
+  const exeName = 'MultipleShell.exe'
+  const script = `
+$ErrorActionPreference = "Stop"
+$exe = "${exeName}"
+
+$procs = @()
+try {
+  $procs = Get-CimInstance Win32_Process -Filter ("Name='" + $exe + "'") -ErrorAction SilentlyContinue
+} catch {
+  $procs = @()
+}
+
+if (-not $procs) {
+  Write-Output 0
+  exit 0
+}
+
+# One Electron app instance roughly maps to one "browser" (main) process which does not have --type=...
+$mainCount = ($procs | Where-Object { $_.CommandLine -notmatch "--type=" } | Measure-Object).Count
+Write-Output $mainCount
+`
+
+  try {
+    const { stdout } = await runPowerShell(script)
+    const raw = String(stdout || '').trim()
+    const count = Number.parseInt(raw, 10)
+    return Number.isFinite(count) ? count : 0
+  } catch (err) {
+    console.warn('[mps] app:getInstanceCount failed', err)
+    return 0
+  }
+})
+
+const applyRdpConfig = async (payload) => {
   if (process.platform !== 'win32') {
     throw new Error('RDP config is only supported on Windows')
   }
@@ -493,17 +926,27 @@ Set-RegistryString -Path $appKey -Name "RequiredCommandLine" -Value ""
 
   await runPowerShell(script)
   return { ok: true, port, alias: remoteAppAlias, exePath }
+}
+
+ipcMain.handle('remote:applyRdpConfig', async (event, payload) => {
+  if (agent && agent.role === 'client') {
+    return agent.call('remote.applyRdpConfig', payload || {})
+  }
+  return applyRdpConfig(payload || {})
 })
 
 ipcMain.handle('draft:load', (event, key) => {
+  if (agent && agent.role === 'client') return agent.call('drafts.load', { key })
   return draftManager.loadDraft(key)
 })
 
 ipcMain.handle('draft:save', (event, key, value) => {
+  if (agent && agent.role === 'client') return agent.call('drafts.save', { key, value })
   return draftManager.saveDraft(key, value)
 })
 
 ipcMain.handle('draft:delete', (event, key) => {
+  if (agent && agent.role === 'client') return agent.call('drafts.delete', { key })
   return draftManager.deleteDraft(key)
 })
 

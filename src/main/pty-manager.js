@@ -352,9 +352,18 @@ class PTYManager {
     }
     
     const sendToWindow = (channel, payload) => {
-      if (!mainWindow || mainWindow.isDestroyed()) return
+      // Newer multi-instance mode: allow passing a custom sender function.
+      if (typeof mainWindow === 'function') {
+        try {
+          mainWindow(channel, payload)
+        } catch (_) {}
+        return
+      }
+
+      if (!mainWindow || typeof mainWindow !== 'object') return
+      if (typeof mainWindow.isDestroyed === 'function' && mainWindow.isDestroyed()) return
       const contents = mainWindow.webContents
-      if (!contents || contents.isDestroyed()) return
+      if (!contents || (typeof contents.isDestroyed === 'function' && contents.isDestroyed())) return
       contents.send(channel, payload)
     }
 

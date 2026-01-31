@@ -11,10 +11,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   getDefaultCwd: () => ipcRenderer.invoke('get-default-cwd'),
   appGetVersion: () => ipcRenderer.invoke('app:getVersion'),
+  appGetInstanceCount: () => ipcRenderer.invoke('app:getInstanceCount'),
   updateGetStatus: () => ipcRenderer.invoke('update:getStatus'),
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateQuitAndInstall: () => ipcRenderer.invoke('update:quitAndInstall'),
   monitorGetStates: () => ipcRenderer.invoke('monitor:getStates'),
+  sessionsList: () => ipcRenderer.invoke('sessions:list'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:readText'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
@@ -44,6 +46,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, payload) => callback(payload)
     ipcRenderer.on('monitor:update', handler)
     return () => ipcRenderer.removeListener('monitor:update', handler)
+  },
+  onSessionsChanged: (callback) => {
+    const handler = (event, payload) => callback(payload)
+    ipcRenderer.on('sessions:changed', handler)
+    return () => ipcRenderer.removeListener('sessions:changed', handler)
   },
 
   onTerminalExit: (sessionId, callback) => {

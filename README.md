@@ -9,6 +9,8 @@
 ## 功能一览（按当前代码实现）
 
 - 多标签终端：同一窗口管理多个会话；标签栏支持溢出滚动。
+- 多实例同步（Host/Client）：同一台 Windows 上可同时运行多个 MultipleShell（含 RDP RemoteApp 会话），共享同一批终端会话；会话列表与终端输出在不同实例间实时同步。
+- 多实例安全：Client 使用独立 `userData`（避免 Chromium profile 并发），configs/drafts/monitor/update/voice 等“有状态写入/副作用”统一收敛到 Host。
 - 新建/关闭保护：新建标签支持“pending”占位；通过 UI 关闭标签/关闭窗口需要输入 `close` 二次确认，避免误操作。
 - 配置模板（仅 3 种类型）：`claude-code` / `codex` / `opencode`。
 - 配置管理：模板列表、创建/编辑/删除（删除有确认弹窗）。
@@ -92,6 +94,15 @@ node .\\scripts\\monitor-stresscheck.js
 3. 可选：点击“浏览”选择工作目录（主进程会阻止选择系统目录）。
 4. 创建后会启动一个 PowerShell 会话，并在当前 Tab 内显示。
 
+### 多实例同步（桌面端 + RemoteApp）
+
+- 自动 Host 选举：第一个启动的实例成为 Host（唯一持有 PTY + 会话注册表）；后续实例成为 Client（仅 UI，通过本机 IPC 访问 Host）。
+- 会话同步：tabs/会话列表以 Host 为准（`sessions:changed` 广播）；任一端新建/输入/关闭会话，其他实例实时可见。
+- 写入集中：Client 不直接读写 configs/drafts/monitor/update/voice 等共享状态，统一通过 Host RPC 执行，避免并发写用户目录导致损坏。
+- Profile 隔离：Client 会将 Chromium `userData` 切到 `%LOCALAPPDATA%\\MultipleShell\\clients\\<pid>`，避免多个实例共享同一 profile 造成锁冲突。
+- 传输与鉴权：默认使用按用户派生的 Windows Named Pipe；握手 token 存在 `%APPDATA%\\MultipleShell\\agent-token`；可用 `MPS_AGENT_PIPE` 覆盖 pipe 名用于排查。
+- 设计文档（含分阶段计划）：`REMOTEAPP_DESKTOP_SYNC_PLAN_ZH.md`。
+
 ### 关闭标签/关闭窗口（UI 需要确认）
 
 - 关闭标签：点击标签上的关闭按钮后，需要输入 `close` 才会关闭（避免误关）。
@@ -127,6 +138,8 @@ node .\\scripts\\monitor-stresscheck.js
 
 1. 打开设置 -> 远程访问：
    - `入口 URL`：Guacamole 的 base URL（例如 `https://remote.example.com/guacamole/`；如果你把 Guacamole 反代到域名根路径，也可以填 `https://remote.example.com/`）。
+   - `系统 RDP 端口`：本机系统 RDP 端口（默认 `3389`）。
+   - `加载 RDP 配置`：在 Windows 上一键开启 RDP+NLA、写入防火墙规则，并注册 RemoteApp 应用别名 `||MultipleShell`（需要以管理员权限运行 MultipleShell；同时建议先关闭多余 MultipleShell 实例，避免 RemoteApp 启动异常）。
    - `RemoteApp 快捷入口`：开关（关闭时 RemoteApp 入口永远不可用）。
    - `连接名 Base64 编码`：开关（开启后会把下面填写的连接名做 Base64 编码再生成直达链接，用于部分 Guacamole/网关部署）。
    - `RemoteApp 连接名` / `VNC 连接名`：推荐用 Guacamole 地址栏 `#/client/c/<...>` 的 `<...>`；也可用 `user-mapping.xml` 里的 `<connection name="...">`（若直达链接要求 Base64，请打开上面的 Base64 开关）。
@@ -223,6 +236,8 @@ node .\\scripts\\monitor-stresscheck.js
 - 额外文件：
   - `claude-homes/`、`codex-homes/`、`opencode-homes/` 用于落地模板文件（便于外部工具读取）。
   - Codex 会话会在临时目录创建 `mps-codex-home-*`，会话退出后自动清理（可用 `MPS_KEEP_CODEX_HOME=1` 禁止清理以便调试）。
+  - 多实例 agent 握手 token：`%APPDATA%\\MultipleShell\\agent-token`（Host 启动时生成；Client 用于握手鉴权）。
+  - Client 独立 profile：`%LOCALAPPDATA%\\MultipleShell\\clients\\<pid>`（每个 Client 独立；删除后会自动重建）。
 - 安全提醒（务必看）：
   - `user-mapping.xml` 为 Guacamole file auth 示例，包含明文账号/密码与目标主机信息；部署前务必替换，并避免把真实凭据提交到仓库。
   - 语音转写 API Key 当前由 `src/main/built-in-config-manager.js` 提供（示例实现）；生产环境建议改为从外部配置/安全存储注入，并做好密钥轮换。
@@ -236,8 +251,10 @@ node .\\scripts\\monitor-stresscheck.js
 
 ## 环境变量（排查/开发用）
 
+- `MPS_AGENT_PIPE`：覆盖本机 agent 的 Named Pipe 名（默认按当前用户派生，桌面端与 RemoteApp 端共享同一条 pipe）。
 - `MPS_UPDATE_URL`：启用自动更新（generic feed）。
 - `MPS_UPDATE_DEV=1`：开发环境允许启用更新。
+- `MPS_REMOTEAPP_EXE_PATH`：RemoteApp 注册时强制指定 `MultipleShell.exe` 路径（开发/自定义安装路径排查用）。
 - `MPS_KEEP_CODEX_HOME=1`：不清理每个会话创建的临时 `CODEX_HOME`。
 - `MPS_DEBUG_ENV_APPLY=1`：调试 env 注入行为（会在终端输出提示）。
 - `MPS_SUPPRESS_DIALOGS=1`：抑制主进程弹窗（自检脚本使用）。

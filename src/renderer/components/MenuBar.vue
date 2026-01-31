@@ -25,6 +25,7 @@ const REMOTE_REMOTEAPP_CLIENT_ID_KEY = 'mps.remote.remoteAppClientId'
 const REMOTE_VNC_CLIENT_ID_KEY = 'mps.remote.vncClientId'
 const REMOTE_CLIENT_ID_BASE64_KEY = 'mps.remote.clientIdBase64'
 const REMOTE_SYSTEM_RDP_PORT_KEY = 'mps.remote.systemRdpPort'
+const REMOTE_RDP_CONFIGURED_KEY = 'mps.remote.rdpConfigured'
 const MONITOR_THUMBNAIL_MODE_KEY = 'mps.monitor.thumbnailMode' // card | terminal
 
 const REMOTE_APP_ALIAS = '||MultipleShell'
@@ -74,6 +75,7 @@ const remoteAppClientId = ref(readLocalStorage(REMOTE_REMOTEAPP_CLIENT_ID_KEY, '
 const vncClientId = ref(readLocalStorage(REMOTE_VNC_CLIENT_ID_KEY, ''))
 const clientIdBase64 = ref(parseBool(readLocalStorage(REMOTE_CLIENT_ID_BASE64_KEY, '0'), false))
 const systemRdpPort = ref(readLocalStorage(REMOTE_SYSTEM_RDP_PORT_KEY, '3389') || '3389')
+const rdpConfigured = ref(parseBool(readLocalStorage(REMOTE_RDP_CONFIGURED_KEY, '0'), false))
 const monitorThumbnailMode = ref(normalizeMonitorThumbnailMode(readLocalStorage(MONITOR_THUMBNAIL_MODE_KEY, 'card')))
 
 const remoteBaseUrlValidation = computed(() => validateHttpUrl(remoteBaseUrl.value))
@@ -106,6 +108,7 @@ const refreshRemoteSettings = () => {
   vncClientId.value = readLocalStorage(REMOTE_VNC_CLIENT_ID_KEY, '')
   clientIdBase64.value = parseBool(readLocalStorage(REMOTE_CLIENT_ID_BASE64_KEY, '0'), false)
   systemRdpPort.value = readLocalStorage(REMOTE_SYSTEM_RDP_PORT_KEY, '3389') || '3389'
+  rdpConfigured.value = parseBool(readLocalStorage(REMOTE_RDP_CONFIGURED_KEY, '0'), false)
 }
 
 const clearRemoteSettings = () => {
@@ -142,6 +145,10 @@ watch(clientIdBase64, (value) => {
 })
 watch(systemRdpPort, (value) => {
   writeLocalStorage(REMOTE_SYSTEM_RDP_PORT_KEY, String(value ?? ''))
+  notifyRemoteSettingsChanged()
+})
+watch(rdpConfigured, (value) => {
+  writeLocalStorage(REMOTE_RDP_CONFIGURED_KEY, value ? '1' : '0')
   notifyRemoteSettingsChanged()
 })
 watch(monitorThumbnailMode, (value) => {
@@ -202,6 +209,7 @@ const armRdpApplyState = () => {
 
 const applyRdpConfig = async () => {
   if (rdpApplyState.value === 'loading') return
+  if (rdpConfigured.value) return
   if (systemRdpPortError.value) {
     rdpApplyState.value = 'error'
     armRdpApplyState()
@@ -214,11 +222,26 @@ const applyRdpConfig = async () => {
     return
   }
 
+  if (window?.electronAPI?.appGetInstanceCount) {
+    try {
+      const count = await window.electronAPI.appGetInstanceCount()
+      if (Number.isFinite(count) && count > 1) {
+        if (window?.alert) window.alert(t('remote.rdpMultiAppRunningHint', { count }))
+        rdpApplyState.value = 'error'
+        armRdpApplyState()
+        return
+      }
+    } catch (err) {
+      console.warn('[mps] appGetInstanceCount failed', err)
+    }
+  }
+
   const port = Number.parseInt(String(systemRdpPort.value ?? '').trim(), 10)
 
   rdpApplyState.value = 'loading'
   try {
     await window.electronAPI.remoteApplyRdpConfig({ systemRdpPort: port })
+    rdpConfigured.value = true
     rdpApplyState.value = 'loaded'
     armRdpApplyState()
   } catch (err) {
@@ -537,15 +560,24 @@ const syncUpdateState = (payload) => {
 
               <div class="remote-hint">{{ t('remote.hint') }}</div>
 
+              <div class="remote-hint remote-hint--status">
+                {{ t('remote.rdpConfigStatus') }}:
+                <span class="remote-status" :class="{ 'remote-status--on': rdpConfigured }">
+                  {{ rdpConfigured ? t('remote.rdpConfigured') : t('remote.rdpNotConfigured') }}
+                </span>
+              </div>
+
               <div class="remote-actions">
                 <button
                   class="remote-load-btn"
                   type="button"
-                  :disabled="rdpApplyState === 'loading' || !!systemRdpPortError"
+                  :disabled="rdpApplyState === 'loading' || !!systemRdpPortError || rdpConfigured"
                   @click="applyRdpConfig"
                 >
                   {{
-                    rdpApplyState === 'loading'
+                    rdpConfigured
+                      ? t('remote.rdpConfigured')
+                      : rdpApplyState === 'loading'
                       ? t('remote.loading')
                       : rdpApplyState === 'loaded'
                         ? t('remote.loaded')
@@ -778,6 +810,19 @@ const syncUpdateState = (payload) => {
   font-size: 11px;
   color: var(--text-secondary);
   line-height: 1.4;
+}
+
+.remote-hint--status {
+  margin-top: 8px;
+}
+
+.remote-status {
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.remote-status--on {
+  color: rgba(34, 197, 94, 0.9);
 }
 
 .remote-actions {

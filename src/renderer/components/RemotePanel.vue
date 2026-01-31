@@ -10,6 +10,7 @@ const REMOTE_REMOTEAPP_ENABLED_KEY = 'mps.remote.remoteAppEnabled'
 const REMOTE_REMOTEAPP_CLIENT_ID_KEY = 'mps.remote.remoteAppClientId'
 const REMOTE_VNC_CLIENT_ID_KEY = 'mps.remote.vncClientId'
 const REMOTE_CLIENT_ID_BASE64_KEY = 'mps.remote.clientIdBase64'
+const REMOTE_RDP_CONFIGURED_KEY = 'mps.remote.rdpConfigured'
 
 const REMOTE_APP_ALIAS = '||MultipleShell'
 
@@ -33,6 +34,7 @@ const remoteAppEnabled = ref(false)
 const remoteAppClientId = ref('')
 const vncClientId = ref('')
 const clientIdBase64 = ref(false)
+const rdpConfigured = ref(false)
 const portalCopyState = ref('idle') // idle | copied | error
 const remoteAppCopyState = ref('idle') // idle | copied | error
 const vncCopyState = ref('idle') // idle | copied | error
@@ -46,6 +48,7 @@ const refresh = () => {
   remoteAppClientId.value = readLocalStorage(REMOTE_REMOTEAPP_CLIENT_ID_KEY, '')
   vncClientId.value = readLocalStorage(REMOTE_VNC_CLIENT_ID_KEY, '')
   clientIdBase64.value = parseBool(readLocalStorage(REMOTE_CLIENT_ID_BASE64_KEY, '0'), false)
+  rdpConfigured.value = parseBool(readLocalStorage(REMOTE_RDP_CONFIGURED_KEY, '0'), false)
 }
 
 onMounted(() => {
@@ -293,6 +296,12 @@ const copyVnc = async () => {
       <div class="remote-title">{{ t('menu.modeRemote') }}</div>
       <div class="remote-subtitle">{{ t('remote.title') }}</div>
     </div>
+    <div class="remote-status-row">
+      {{ t('remote.rdpConfigStatus') }}:
+      <span class="remote-status-pill" :class="{ on: rdpConfigured }">
+        {{ rdpConfigured ? t('remote.rdpConfigured') : t('remote.rdpNotConfigured') }}
+      </span>
+    </div>
 
     <div class="remote-grid">
       <div
@@ -420,6 +429,32 @@ const copyVnc = async () => {
   font-size: 12px;
   color: var(--text-secondary);
   font-weight: 700;
+}
+
+.remote-status-row {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.remote-status-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.remote-status-pill.on {
+  border-color: rgba(34, 197, 94, 0.38);
+  background: rgba(34, 197, 94, 0.12);
+  color: rgba(134, 239, 172, 0.92);
 }
 
 .remote-grid {
