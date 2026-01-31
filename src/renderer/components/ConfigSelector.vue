@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ConfigEditor from './ConfigEditor.vue'
 
@@ -9,7 +9,7 @@ const props = defineProps({
   currentTabConfig: { type: Object, default: null }
 })
 
-const emit = defineEmits(['create', 'update', 'saveTemplate', 'deleteTemplate', 'close', 'switchMode'])
+const emit = defineEmits(['create', 'update', 'saveTemplate', 'deleteTemplate', 'close', 'switchMode', 'importFromCCSwitch'])
 const { t } = useI18n()
 
 const selectedConfig = ref(null)
@@ -19,6 +19,102 @@ const editingConfig = ref(null)
 const isSelectingFolder = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteCandidate = ref(null)
+const activeType = ref('claude-code')
+
+const normalizeType = (type) => (typeof type === 'string' ? type.trim().toLowerCase() : '')
+const TYPE_ORDER = ['claude-code', 'codex', 'opencode']
+
+const ONLY_CCSWITCH_CONFIGS_KEY = 'mps.selectTemplate.onlyCCSwitchConfigs'
+const LEGACY_ONLY_CCSWITCH_CONFIGS_KEY = 'mps.manageTemplates.onlyCCSwitchConfigs'
+const CCSWITCH_AUTODETECT_KEY = 'mps.selectTemplate.ccswitchAutoDetect'
+
+const readBool = (key, fallback = false) => {
+  try {
+    const raw = String(localStorage.getItem(key) ?? '').trim().toLowerCase()
+    if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true
+    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false
+    return fallback
+  } catch (_) {
+    return fallback
+  }
+}
+
+const writeBool = (key, value) => {
+  try {
+    localStorage.setItem(key, value ? '1' : '0')
+  } catch (_) {}
+}
+
+const onlyCCSwitchConfigs = ref(readBool(ONLY_CCSWITCH_CONFIGS_KEY, readBool(LEGACY_ONLY_CCSWITCH_CONFIGS_KEY, true)))
+const autoDetectCCSwitchStatus = ref(readBool(CCSWITCH_AUTODETECT_KEY, true))
+
+const ccSwitchDetectState = ref('idle') // idle | loading | ready | error
+const ccSwitchProxyEnabled = ref(null) // boolean | null
+const ccSwitchFailoverEnabled = ref(null) // boolean | null
+const ccSwitchDetectError = ref('')
+
+const resolveProxyAppKeyForType = (type) => {
+  const t = normalizeType(type)
+  if (t === 'claude-code') return 'claude'
+  if (t === 'codex') return 'codex'
+  // OpenCode uses Codex proxy settings in CC Switch.
+  if (t === 'opencode') return 'codex'
+  return null
+}
+
+const resetCCSwitchStatus = () => {
+  ccSwitchDetectState.value = 'idle'
+  ccSwitchProxyEnabled.value = null
+  ccSwitchFailoverEnabled.value = null
+  ccSwitchDetectError.value = ''
+}
+
+const refreshCCSwitchStatus = async () => {
+  if (props.mode !== 'create') return
+  if (!autoDetectCCSwitchStatus.value) return
+
+  const api = window?.electronAPI
+  if (!api?.ccSwitchListProviders) {
+    ccSwitchDetectState.value = 'error'
+    ccSwitchDetectError.value = 'Missing electronAPI.ccSwitchListProviders'
+    return
+  }
+
+  ccSwitchDetectState.value = 'loading'
+  ccSwitchDetectError.value = ''
+
+  try {
+    const snapshot = await api.ccSwitchListProviders()
+    const proxyAppKey = resolveProxyAppKeyForType(activeType.value)
+    const proxyCfg = proxyAppKey ? snapshot?.proxy?.[proxyAppKey] : null
+
+    ccSwitchProxyEnabled.value = proxyCfg ? Boolean(proxyCfg.proxyEnabled) : null
+    ccSwitchFailoverEnabled.value = proxyCfg ? Boolean(proxyCfg.autoFailoverEnabled) : null
+    ccSwitchDetectState.value = 'ready'
+  } catch (err) {
+    ccSwitchDetectState.value = 'error'
+    ccSwitchProxyEnabled.value = null
+    ccSwitchFailoverEnabled.value = null
+    ccSwitchDetectError.value = err?.message ? String(err.message) : String(err || 'Unknown error')
+  }
+}
+
+const typeTabs = computed(() => [
+  { value: 'claude-code', label: t('configEditor.types.claudeCode') },
+  { value: 'codex', label: t('configEditor.types.codex') },
+  { value: 'opencode', label: t('configEditor.types.opencode') }
+])
+
+const filteredTemplates = computed(() => {
+  const current = normalizeType(activeType.value)
+  const list = (props.configTemplates || []).filter((cfg) => normalizeType(cfg?.type) === current)
+
+  // Only apply CC Switch visibility filters in create mode (select template).
+  if (props.mode !== 'create') return list
+  if (!onlyCCSwitchConfigs.value) return list
+
+  return list.filter((cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy))
+})
 
 watch(
   () => props.mode,
@@ -27,10 +123,49 @@ watch(
     editingConfig.value = null
     selectedConfig.value = null
     customWorkingDir.value = ''
+    activeType.value = 'claude-code'
     showDeleteConfirm.value = false
     deleteCandidate.value = null
   }
 )
+
+watch(onlyCCSwitchConfigs, (v) => {
+  writeBool(ONLY_CCSWITCH_CONFIGS_KEY, Boolean(v))
+
+  if (props.mode !== 'create') return
+  if (!v) return
+
+  const cfg = selectedConfig.value
+  if (!cfg) return
+  const isCCSwitch = Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy)
+  if (!isCCSwitch) selectedConfig.value = null
+})
+
+watch(autoDetectCCSwitchStatus, async (v) => {
+  writeBool(CCSWITCH_AUTODETECT_KEY, Boolean(v))
+  if (!v) {
+    resetCCSwitchStatus()
+    return
+  }
+  await refreshCCSwitchStatus()
+})
+
+watch(
+  () => props.configTemplates,
+  (templates) => {
+    const list = Array.isArray(templates) ? templates : []
+    const types = new Set(list.map((c) => normalizeType(c?.type)).filter((t) => TYPE_ORDER.includes(t)))
+    if (types.size === 0) return
+    if (types.has(normalizeType(activeType.value))) return
+    activeType.value = TYPE_ORDER.find((t) => types.has(t)) || 'claude-code'
+  },
+  { immediate: true, deep: true }
+)
+
+watch(activeType, () => {
+  selectedConfig.value = null
+  refreshCCSwitchStatus()
+})
 
 watch(
   () => props.currentTabConfig,
@@ -79,7 +214,15 @@ const saveConfig = async (config) => {
 }
 
 const addTemplate = () => {
-  editingConfig.value = null
+  editingConfig.value = {
+    id: null,
+    type: activeType.value,
+    name: '',
+    envVars: {},
+    useCCSwitch: false,
+    useCCSwitchProxy: false,
+    ccSwitchProviderId: ''
+  }
   showEditor.value = true
 }
 
@@ -104,6 +247,7 @@ const confirmDeleteTemplate = async () => {
   cancelDeleteTemplate()
 }
 
+
 const close = () => emit('close')
 const switchMode = (mode) => emit('switchMode', mode)
 
@@ -111,6 +255,17 @@ const headerTitle = computed(() => {
   if (props.mode === 'manage') return t('configSelector.titleManageTemplates')
   if (props.mode === 'edit') return t('configSelector.titleEditTabConfig')
   return t('configSelector.titleSelectTemplate')
+})
+
+const ccSwitchStatusText = (value) => {
+  if (ccSwitchDetectState.value === 'loading') return t('configSelector.ccswitchDetecting')
+  if (value === true) return t('configSelector.ccswitchEnabled')
+  if (value === false) return t('configSelector.ccswitchDisabled')
+  return t('configSelector.ccswitchUnknown')
+}
+
+onMounted(() => {
+  refreshCCSwitchStatus()
 })
 </script>
 
@@ -120,6 +275,7 @@ const headerTitle = computed(() => {
       <h3>{{ headerTitle }}</h3>
       <div class="header-actions">
         <button v-if="mode === 'create'" class="btn-ghost" @click="switchMode('manage')">{{ t('configSelector.manage') }}</button>
+        <button v-if="mode === 'manage'" class="btn-ghost" @click="emit('importFromCCSwitch')">{{ t('configSelector.importFromCCSwitch') }}</button>
         <button v-if="mode === 'manage'" class="btn-ghost" @click="switchMode('create')">{{ t('configSelector.back') }}</button>
         <button class="btn-icon" @click="close" :title="t('configSelector.close')">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -129,10 +285,68 @@ const headerTitle = computed(() => {
 
     <div class="content-body">
       <div class="config-list-container">
+        <div class="type-tabs">
+          <button
+            v-for="tab in typeTabs"
+            :key="tab.value"
+            class="type-tab"
+            :class="{ active: activeType === tab.value }"
+            type="button"
+            @click="activeType = tab.value"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+
+        <div v-if="mode === 'create'" class="category-panel">
+          <label class="section-label">{{ t('configSelector.ccswitchSectionTitle') }}</label>
+          <div class="category-box">
+            <div class="category-item">
+              <label class="slide-toggle" @click.stop>
+                <input v-model="onlyCCSwitchConfigs" type="checkbox" @click.stop />
+                <span class="slide-toggle-slider" aria-hidden="true"></span>
+                <span class="slide-toggle-text">{{ t('configSelector.onlyCCSwitchConfigs') }}</span>
+              </label>
+            </div>
+
+            <div class="category-item">
+              <label class="slide-toggle" @click.stop>
+                <input v-model="autoDetectCCSwitchStatus" type="checkbox" @click.stop />
+                <span class="slide-toggle-slider" aria-hidden="true"></span>
+                <span class="slide-toggle-text">{{ t('configSelector.ccswitchAutoDetect') }}</span>
+              </label>
+              <button
+                class="btn-ghost-small"
+                type="button"
+                :disabled="!autoDetectCCSwitchStatus"
+                @click.stop="refreshCCSwitchStatus"
+              >
+                {{ t('configSelector.ccswitchRefresh') }}
+              </button>
+            </div>
+
+            <div class="category-item status-item">
+              <span class="status-label">{{ t('configSelector.ccswitchStatus') }}</span>
+              <span class="status-values">
+                <span class="status-pill" :class="{ on: ccSwitchProxyEnabled === true, off: ccSwitchProxyEnabled === false }">
+                  {{ t('configSelector.ccswitchProxy') }}: {{ ccSwitchStatusText(ccSwitchProxyEnabled) }}
+                </span>
+                <span class="status-pill" :class="{ on: ccSwitchFailoverEnabled === true, off: ccSwitchFailoverEnabled === false }">
+                  {{ t('configSelector.ccswitchFailover') }}: {{ ccSwitchStatusText(ccSwitchFailoverEnabled) }}
+                </span>
+              </span>
+            </div>
+
+            <div v-if="ccSwitchDetectState === 'error' && ccSwitchDetectError" class="status-error">
+              {{ ccSwitchDetectError }}
+            </div>
+          </div>
+        </div>
+
         <label class="section-label">{{ t('configSelector.availableTemplates') }}</label>
-        <div class="config-list">
+        <div v-if="filteredTemplates.length > 0" class="config-list">
           <div
-            v-for="config in props.configTemplates"
+            v-for="config in filteredTemplates"
             :key="config.id || config.name"
             :class="['config-item', { active: selectedConfig === config }]"
             @click="mode === 'create' ? (selectedConfig = config) : null"
@@ -145,7 +359,6 @@ const headerTitle = computed(() => {
                 <span class="config-name">{{ config.name }}</span>
                 <span class="config-type">{{ config.type || t('configSelector.custom') }}</span>
             </div>
-            
             <div v-if="mode === 'manage'" class="config-actions">
               <button @click.stop="editTemplate(config)" class="btn-icon-small" :title="t('configSelector.edit')">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
@@ -158,6 +371,9 @@ const headerTitle = computed(() => {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
           </div>
+        </div>
+        <div v-else class="empty-hint">
+          {{ t('configSelector.emptyList') }}
         </div>
       </div>
 
@@ -254,6 +470,196 @@ h3 {
   letter-spacing: 0.05em;
 }
 
+.category-panel {
+  margin-bottom: 14px;
+}
+
+.category-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.category-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.btn-ghost-small {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  transition: all 0.2s;
+}
+
+.btn-ghost-small:hover:enabled {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.btn-ghost-small:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.status-item {
+  align-items: flex-start;
+}
+
+.status-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  padding-top: 2px;
+}
+
+.status-values {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.status-pill {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.status-pill.on {
+  color: rgba(34, 197, 94, 0.95);
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.status-pill.off {
+  color: rgba(239, 68, 68, 0.95);
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.status-error {
+  font-size: 12px;
+  color: rgba(239, 68, 68, 0.95);
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.slide-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.slide-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.slide-toggle-slider {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  transition: background 0.2s, border-color 0.2s;
+  flex-shrink: 0;
+}
+
+.slide-toggle-slider::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s, background 0.2s;
+}
+
+.slide-toggle input:checked + .slide-toggle-slider {
+  background: rgba(59, 130, 246, 0.6);
+  border-color: rgba(59, 130, 246, 0.8);
+}
+
+.slide-toggle input:checked + .slide-toggle-slider::before {
+  transform: translateX(18px);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.slide-toggle input:focus-visible + .slide-toggle-slider {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
+}
+
+.slide-toggle-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.slide-toggle:hover .slide-toggle-text {
+  color: var(--text-primary);
+}
+
+.type-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 14px;
+}
+
+.type-tab {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.type-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.type-tab.active {
+  color: var(--text-primary);
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
 .config-list {
   display: flex;
   flex-direction: column;
@@ -301,6 +707,7 @@ h3 {
     display: flex;
     flex-direction: column;
 }
+
 
 .config-name {
     font-weight: 500;
@@ -508,5 +915,15 @@ input:focus {
 
 .btn-danger:hover {
   background: rgba(239, 68, 68, 0.25);
+}
+
+.empty-hint {
+  padding: 18px 10px 22px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.02);
 }
 </style>

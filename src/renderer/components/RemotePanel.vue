@@ -444,9 +444,9 @@ const copyVnc = async () => {
 .remote-status-pill {
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--border-color);
+  background: var(--surface-hover);
+  color: var(--text-primary);
   font-size: 11px;
   font-weight: 800;
 }
@@ -477,7 +477,7 @@ const copyVnc = async () => {
 .remote-card:hover:not(.remote-card--disabled) {
   transform: translateY(-1px);
   border-color: var(--surface-active);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--surface-active);
 }
 
 .remote-card--disabled {
@@ -500,17 +500,17 @@ const copyVnc = async () => {
 .remote-card-action {
   padding: 4px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.86);
+  border: 1px solid var(--border-color);
+  background: var(--bg-color);
+  color: var(--text-primary);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.02em;
 }
 
 .remote-card-action:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.18);
+  background: var(--surface-hover);
+  border-color: var(--text-secondary);
 }
 
 .remote-card-action:disabled {

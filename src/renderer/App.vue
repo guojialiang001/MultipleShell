@@ -190,6 +190,20 @@ const loadConfigTemplates = async () => {
   configTemplates.value = await window.electronAPI.getConfigs()
 }
 
+const importFromCCSwitch = async () => {
+  if (!window?.electronAPI?.ccSwitchImportProviders) return
+  try {
+    const updated = await window.electronAPI.ccSwitchImportProviders()
+    if (Array.isArray(updated)) {
+      configTemplates.value = updated
+      return
+    }
+  } catch (err) {
+    console.error('[mps] ccSwitchImportProviders failed', err)
+  }
+  await loadConfigTemplates()
+}
+
 const saveConfigTemplate = async (config) => {
   try {
     const updated = await window.electronAPI.saveConfig(config)
@@ -628,6 +642,7 @@ const toggleVoiceCapture = () => {
               @update="updateTabConfig"
               @saveTemplate="saveConfigTemplate"
               @deleteTemplate="deleteConfigTemplate"
+              @importFromCCSwitch="importFromCCSwitch"
               @close="closeConfigSelector"
               @switchMode="switchConfigMode"
             />
@@ -726,25 +741,36 @@ const toggleVoiceCapture = () => {
 
 <style>
 :root {
-  --bg-color: #0a0a0a; /* Neutral Deep Black */
-  --surface-color: #161616; /* Soft Dark Gray */
-  --surface-hover: #222222;
-  --surface-active: #333333;
-  --border-color: #262626;
+  /* Ultra Dark Theme - Pure Black & Comfortable */
+  --bg-color: #000000; /* Pure Black */
+  --surface-color: #0a0a0a; /* Almost Black */
+  --surface-hover: #161616; /* Subtle dark gray for hover */
+  --surface-active: #222222; /* Active state */
+  --border-color: #1f1f1f; /* Very subtle border */
   
-  --primary-color: #3f72c4; /* Soft Blue - Comfortable */
-  --primary-hover: #2d5fb3;
+  --primary-color: #3b82f6; /* Vivid Blue for contrast on black */
+  --primary-hover: #60a5fa;
   
-  --text-primary: #e5e5e5; /* Soft White */
-  --text-secondary: #a3a3a3; /* Neutral Gray */
+  --text-primary: #ededed; /* High contrast white */
+  --text-secondary: #888888; /* Neutral gray */
   
-  --danger-color: #f87171; /* Soft Red */
-  --success-color: #4ade80; /* Soft Green */
+  --danger-color: #ef4444;
+  --success-color: #22c55e;
+  --warning-color: #eab308;
   
-  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  
+  /* Consistent Rounded Corners */
   --radius-sm: 6px;
   --radius-md: 10px;
-  --radius-lg: 16px;
+  --radius-lg: 16px; /* For main app corners */
+  
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+  
+  --transition-fast: 0.15s cubic-bezier(0.2, 0, 0, 1);
+  --transition-normal: 0.3s cubic-bezier(0.2, 0, 0, 1);
 }
 
 * {
@@ -754,7 +780,13 @@ const toggleVoiceCapture = () => {
 }
 
 body,
-html,
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: transparent; /* Essential for rounded corners */
+}
+
 #app {
   width: 100%;
   height: 100%;
@@ -763,18 +795,21 @@ html,
   color: var(--text-primary);
   font-family: var(--font-family);
   font-size: 14px;
-  border-radius: var(--radius-lg);
-  clip-path: inset(0 round var(--radius-lg));
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  padding: 4px; /* Padding for window resize handle / shadow space if needed, or 0 if frameless */
 }
 
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
+  height: 100%;
   background-color: var(--bg-color);
-  clip-path: inset(0 round var(--radius-lg));
+  overflow: hidden;
+  border-radius: var(--radius-lg); /* The main rounded corner */
+  border: 1px solid var(--border-color); /* Subtle border to define edges */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05); /* Inner light stroke */
 }
 
 .content {
@@ -784,6 +819,8 @@ html,
   display: flex;
   flex-direction: column;
   min-height: 0;
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
 }
 
 .shell-view,
@@ -793,6 +830,7 @@ html,
   min-height: 0;
   display: flex;
   flex-direction: column;
+  background-color: var(--bg-color);
 }
 
 .shell-view {
@@ -808,6 +846,7 @@ html,
   position: absolute;
   inset: 0;
   z-index: 1200;
+  background-color: var(--bg-color);
 }
 
 .terminal-wrapper {
@@ -815,6 +854,7 @@ html,
   width: 100%;
   min-height: 0;
   background-color: var(--bg-color);
+  position: relative;
 }
 
 .terminal-wrapper--preview {
@@ -827,33 +867,37 @@ html,
   opacity: 0;
   pointer-events: none;
   overflow: hidden;
+  visibility: hidden;
 }
 
 .monitor-dock-toggle {
   position: absolute;
-  right: 16px;
-  bottom: 72px;
+  right: 24px;
+  bottom: 24px;
   z-index: 1600;
-  padding: 8px 12px;
+  padding: 8px 16px;
   border-radius: 999px;
-  border: 1px solid rgba(63, 114, 196, 0.55);
-  background: rgba(63, 114, 196, 0.18);
-  color: #bfdbfe;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--primary-color);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0.02em;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-md);
+  transition: all var(--transition-normal);
 }
 
 .monitor-dock-toggle:hover {
-  transform: translateY(-1px);
-  background: rgba(63, 114, 196, 0.24);
+  transform: translateY(-2px);
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--primary-color);
 }
 
 .monitor-dock-toggle--open {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.85);
+  border-color: var(--surface-active);
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 /* Modal Overlay */
@@ -863,24 +907,29 @@ html,
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
+  background-color: rgba(0, 0, 0, 0.7); /* Darker overlay */
+  backdrop-filter: blur(12px);
   z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 24px;
+  border-radius: var(--radius-lg); /* Clip to app radius */
 }
 
 .modal-container {
   min-width: 480px;
   max-width: 90%;
   animation: modal-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
 }
 
 @keyframes modal-slide-up {
   from {
     opacity: 0;
-    transform: translateY(20px) scale(0.98);
+    transform: translateY(16px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -913,32 +962,38 @@ html,
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: 20px;
   text-align: center;
+  padding: 40px;
+  border-radius: var(--radius-lg);
+  border: 1px dashed var(--border-color);
+  background: var(--surface-color);
 }
 
 .empty-icon {
-  font-size: 48px;
+  font-size: 56px;
   margin-bottom: 8px;
-  opacity: 0.8;
+  opacity: 0.6;
+  filter: grayscale(1);
+  color: var(--text-secondary);
 }
 
 .empty-card h2 {
   font-weight: 600;
-  font-size: 18px;
+  font-size: 20px;
   color: var(--text-primary);
 }
 
 .empty-card p {
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .voice-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: 16px;
+  padding: 12px 24px;
   border-top: 1px solid var(--border-color);
   background: var(--surface-color);
 }
@@ -946,26 +1001,35 @@ html,
 .voice-btn {
   background: var(--surface-hover);
   color: var(--text-primary);
-  padding: 8px 14px;
+  padding: 10px 18px;
   border-radius: var(--radius-md);
   font-weight: 600;
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-color);
+  transition: all var(--transition-fast);
+}
+
+.voice-btn:hover:not(:disabled) {
+  background: var(--surface-active);
+  border-color: var(--text-secondary);
 }
 
 .voice-btn--arming {
-  background: var(--surface-active);
+  background: var(--warning-color);
+  color: #000000;
+  border-color: transparent;
 }
 
 .voice-btn--recording {
   background: var(--danger-color);
   color: #ffffff;
+  border-color: transparent;
 }
 
 .voice-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -980,18 +1044,19 @@ html,
 
 .voice-btn--recording .voice-indicator {
   background: #ffffff;
-  animation: pulse 1.2s ease-in-out infinite;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 .voice-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 13px;
+  gap: 16px;
+  font-size: 14px;
 }
 
 .voice-status {
   color: var(--text-secondary);
+  font-family: monospace;
 }
 
 .voice-error {
@@ -1000,13 +1065,13 @@ html,
 
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.6);
   }
   70% {
-    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+    box-shadow: 0 0 0 10px rgba(248, 81, 73, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    box-shadow: 0 0 0 0 rgba(248, 81, 73, 0);
   }
 }
 
@@ -1014,9 +1079,10 @@ kbd {
   background: var(--surface-active);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
-  font-family: monospace;
-  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+  font-size: 0.85em;
   border: 1px solid var(--border-color);
+  color: var(--text-primary);
 }
 
 /* Buttons */
@@ -1024,30 +1090,38 @@ button {
   cursor: pointer;
   border: none;
   font-family: inherit;
-  transition: all 0.2s;
+  transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
 }
 
 .primary-btn {
   background-color: var(--primary-color);
-  color: white;
+  color: #ffffff;
   padding: 8px 16px;
   border-radius: var(--radius-md);
   font-weight: 500;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  border: 1px solid transparent;
 }
 
 .primary-btn:hover {
   background-color: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.primary-btn:active {
+  transform: translateY(0);
 }
 
 .primary-btn.large-btn {
-  padding: 10px 24px;
+  padding: 12px 24px;
   font-size: 15px;
 }
 
-/* Scrollbars */
+/* Scrollbars - Stealth Mode */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -1059,11 +1133,15 @@ button {
 
 ::-webkit-scrollbar-thumb {
   background: var(--surface-active);
-  border-radius: var(--radius-sm);
-  border: 2px solid var(--bg-color);
+  border: 2px solid var(--bg-color); /* Creates padding effect */
+  border-radius: 99px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 </style>

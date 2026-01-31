@@ -304,9 +304,9 @@ onUnmounted(() => {
   bottom: 120px;
   width: min(420px, calc(100vw - 32px));
   max-height: min(70vh, 560px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  background: rgba(22, 22, 22, 0.92);
+  background: var(--surface-color);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(10px);
   z-index: 1600;
@@ -331,7 +331,7 @@ onUnmounted(() => {
   font-weight: 800;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--text-primary);
 }
 
 .monitor-stats {

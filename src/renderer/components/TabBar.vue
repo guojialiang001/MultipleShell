@@ -328,7 +328,7 @@ watch(
   gap: 6px;
   padding: 6px 12px 8px 12px;
   border-top: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-hover);
   color: var(--text-secondary);
   font-size: 12px;
   user-select: none;
@@ -363,7 +363,7 @@ watch(
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--text-secondary);
 }
 
 .path-tab {
@@ -371,7 +371,7 @@ watch(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--text-primary);
   max-width: 240px;
 }
 
@@ -382,7 +382,7 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--text-primary);
 }
 
 .tab {

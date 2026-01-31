@@ -6,6 +6,7 @@ const os = require('os')
 const path = require('path')
 const builtInConfig = require('./built-in-config-manager')
 const configManager = require('./config-manager')
+const ccSwitch = require('./ccswitch')
 const draftManager = require('./draft-manager')
 const ptyManager = require('./pty-manager')
 const shellMonitor = require('./shell-monitor')
@@ -347,7 +348,7 @@ app.whenReady().then(async () => {
         const workingDir = typeof params?.workingDir === 'string' ? params.workingDir : ''
         if (!config || typeof config !== 'object') throw new Error('Invalid config')
 
-        const sessionId = ptyManager.createSession(config, workingDir, sendFromHostPty)
+        const sessionId = await ptyManager.createSession(config, workingDir, sendFromHostPty)
         sessionRegistry.set(sessionId, {
           sessionId,
           title: typeof config?.name === 'string' ? config.name : 'Unnamed',
@@ -406,6 +407,9 @@ app.whenReady().then(async () => {
         if (!configId.trim()) throw new Error('Invalid configId')
         return configManager.deleteConfig(configId)
       }
+
+      if (method === 'ccswitch.providers.list') return ccSwitch.listProviders()
+      if (method === 'ccswitch.providers.import') return ccSwitch.importProviders(configManager)
 
       if (method === 'drafts.load') return draftManager.loadDraft(params?.key)
       if (method === 'drafts.save') return draftManager.saveDraft(params?.key, params?.value)
@@ -507,7 +511,17 @@ ipcMain.handle('delete-config', (event, configId) => {
   return configManager.deleteConfig(configId)
 })
 
-ipcMain.handle('create-terminal', (event, config, workingDir) => {
+ipcMain.handle('ccswitch:listProviders', async () => {
+  if (agent && agent.role === 'client') return agent.call('ccswitch.providers.list', {})
+  return ccSwitch.listProviders()
+})
+
+ipcMain.handle('ccswitch:importProviders', async () => {
+  if (agent && agent.role === 'client') return agent.call('ccswitch.providers.import', {})
+  return ccSwitch.importProviders(configManager)
+})
+
+ipcMain.handle('create-terminal', async (event, config, workingDir) => {
   if (!config || typeof config !== 'object') {
     throw new Error('Invalid config')
   }
@@ -519,7 +533,7 @@ ipcMain.handle('create-terminal', (event, config, workingDir) => {
     return agent.call('terminal.create', { config, workingDir: workingDir || '' })
   }
 
-  const sessionId = ptyManager.createSession(config, workingDir, sendFromHostPty)
+  const sessionId = await ptyManager.createSession(config, workingDir, sendFromHostPty)
   sessionRegistry.set(sessionId, {
     sessionId,
     title: typeof config?.name === 'string' ? config.name : 'Unnamed',

@@ -656,6 +656,8 @@ const syncUpdateState = (payload) => {
   align-items: center;
   user-select: none;
   -webkit-app-region: drag;
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
 }
 
 .spacer {

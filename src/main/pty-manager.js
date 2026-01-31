@@ -5,9 +5,110 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const shellMonitor = require('./shell-monitor')
+const ccSwitch = require('./ccswitch')
 
 const OPENCODE_CONFIG_TEMPLATE = '{\n  "$schema": "https://opencode.ai/config.json",\n  "permission": {\n    "edit": "ask",\n    "bash": "ask",\n    "webfetch": "allow"\n  }\n}\n'
+const OPENCODE_PERMISSION_TEMPLATE = { edit: 'ask', bash: 'ask', webfetch: 'allow' }
 const PROMPT_MARKER = '__MPS_PROMPT__'
+
+const clonePlain = (value) => {
+  try {
+    return structuredClone(value)
+  } catch (_) {
+    return JSON.parse(JSON.stringify(value))
+  }
+}
+
+const parseJsonObject = (raw) => {
+  try {
+    if (raw == null) return null
+    const text = String(raw || '').trim()
+    if (!text) return null
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed
+  } catch (_) {
+    return null
+  }
+}
+
+const ensureObject = (value) => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  return {}
+}
+
+const mergeObjectsWithEnv = (base, extra) => {
+  const a = ensureObject(base)
+  const b = ensureObject(extra)
+  const out = { ...a, ...b }
+  const envA = ensureObject(a.env)
+  const envB = ensureObject(b.env)
+  if (Object.keys(envA).length > 0 || Object.keys(envB).length > 0) {
+    out.env = { ...envA, ...envB }
+  }
+  return out
+}
+
+const normalizeProxyHost = (host) => {
+  const raw = String(host || '').trim()
+  if (!raw) return '127.0.0.1'
+  const lower = raw.toLowerCase()
+  if (lower === '0.0.0.0' || lower === '::' || lower === '[::]') return '127.0.0.1'
+  return raw
+}
+
+const buildProxyOrigin = (host, port) => {
+  const safeHost = normalizeProxyHost(host)
+  const p = Number(port)
+  const safePort = Number.isFinite(p) && p > 0 ? p : 15721
+  const hostPart = safeHost.includes(':') && !safeHost.startsWith('[') ? `[${safeHost}]` : safeHost
+  return `http://${hostPart}:${safePort}`
+}
+
+const joinUrl = (origin, pathname) =>
+  `${String(origin || '').replace(/\/+$/, '')}/${String(pathname || '').replace(/^\/+/, '')}`
+
+const rewriteTomlBaseUrl = (toml, baseUrl) => {
+  const raw = String(toml || '')
+  if (!raw.trim()) return { text: raw, replaced: false }
+
+  let replaced = false
+  const next = raw.replace(/(^\s*base_url\s*=\s*)"[^"]*"/gmi, (_m, p1) => {
+    replaced = true
+    return `${p1}"${String(baseUrl || '').replace(/"/g, '\\"')}"`
+  })
+
+  return { text: next, replaced }
+}
+
+const makeCodexProxyToml = (baseUrl) => {
+  const safe = String(baseUrl || '')
+  return (
+    'model_provider = "ccswitch"\n' +
+    'model = "gpt-4o"\n' +
+    'disable_response_storage = true\n' +
+    '\n' +
+    '[model_providers.ccswitch]\n' +
+    'name = "CC Switch Proxy"\n' +
+    `base_url = "${safe.replace(/"/g, '\\"')}"\n` +
+    'wire_api = "responses"\n' +
+    'requires_openai_auth = true\n'
+  )
+}
+
+const extractOpenCodeProviderFragment = (settingsConfig, providerId) => {
+  if (!settingsConfig || typeof settingsConfig !== 'object' || Array.isArray(settingsConfig)) return null
+
+  const configObj = settingsConfig
+  if (configObj.$schema || configObj.provider) {
+    const providerBlock = configObj.provider
+    if (providerBlock && typeof providerBlock === 'object' && !Array.isArray(providerBlock)) {
+      if (providerId && providerBlock[providerId]) return providerBlock[providerId]
+    }
+  }
+
+  return configObj
+}
 
 class PTYManager {
   constructor() {
@@ -261,13 +362,152 @@ class PTYManager {
 
     return out
   }
+
+  async resolveCCSwitchRuntimeConfig(config) {
+    const base = config && typeof config === 'object' ? clonePlain(config) : {}
+    const useProxy = Boolean(base?.useCCSwitchProxy)
+    const useCCSwitch = Boolean(base?.useCCSwitch) || useProxy
+    if (!useCCSwitch) return { config: base, extraEnv: {} }
+
+    const type = typeof base?.type === 'string' ? base.type : ''
+    const appKey =
+      type === 'claude-code' ? 'claude' : type === 'codex' ? 'codex' : type === 'opencode' ? 'opencode' : ''
+    if (!appKey) return { config: base, extraEnv: {} }
+
+    const snapshot = await ccSwitch.listProviders()
+    const requestedProviderId =
+      typeof base?.ccSwitchProviderId === 'string' ? base.ccSwitchProviderId.trim() : ''
+    const currentProviderId = String(snapshot?.apps?.[appKey]?.currentId || '').trim()
+    const providerId = requestedProviderId || currentProviderId
+    const providers = Array.isArray(snapshot?.apps?.[appKey]?.providers) ? snapshot.apps[appKey].providers : []
+    const provider = providerId ? providers.find((p) => p && p.id === providerId) : null
+
+    if (!provider && !useProxy) {
+      throw new Error(`CC Switch provider not found for ${appKey} (id=${providerId || '<current>'})`)
+    }
+
+    const proxyAppKey = appKey === 'opencode' ? 'codex' : appKey
+    const proxyCfg = snapshot?.proxy?.[proxyAppKey] || null
+    const proxyOrigin = useProxy ? buildProxyOrigin(proxyCfg?.listenAddress, proxyCfg?.listenPort) : null
+    const proxyOpenAIBase = proxyOrigin ? joinUrl(proxyOrigin, '/v1') : null
+
+    const extraEnv = {}
+
+    if (type === 'claude-code') {
+      const baseSettings = parseJsonObject(base?.claudeSettingsJson) || {}
+      const providerSettings = ensureObject(provider?.settingsConfig)
+
+      const merged = mergeObjectsWithEnv(baseSettings, providerSettings)
+      if (useProxy && proxyOrigin) {
+        merged.env = ensureObject(merged.env)
+        merged.env.ANTHROPIC_BASE_URL = proxyOrigin
+        merged.env.ANTHROPIC_AUTH_TOKEN = 'ccswitch'
+      }
+
+      // Claude Code reads env vars from settings.json. Keep them file-based to avoid leaking in the terminal.
+      base.claudeSettingsJson = JSON.stringify(merged, null, 2)
+      base.useCCSwitch = true
+      return { config: base, extraEnv }
+    }
+
+    if (type === 'codex') {
+      const settings = ensureObject(provider?.settingsConfig)
+      const providerToml = typeof settings?.config === 'string' ? settings.config : ''
+      const providerAuth = ensureObject(settings?.auth)
+
+      let toml =
+        providerToml ||
+        (typeof base?.codexConfigToml === 'string' ? base.codexConfigToml : '')
+
+      let authObj =
+        Object.keys(providerAuth).length > 0
+          ? clonePlain(providerAuth)
+          : (parseJsonObject(base?.codexAuthJson) || {})
+
+      if (useProxy && proxyOpenAIBase) {
+        const rewritten = rewriteTomlBaseUrl(toml, proxyOpenAIBase)
+        toml = rewritten.replaced ? rewritten.text : makeCodexProxyToml(proxyOpenAIBase)
+
+        authObj = ensureObject(authObj)
+        authObj.OPENAI_API_KEY = 'ccswitch'
+        authObj.api_key = 'ccswitch'
+        authObj.openai_api_key = 'ccswitch'
+
+        extraEnv.OPENAI_BASE_URL = proxyOpenAIBase
+        extraEnv.OPENAI_API_BASE = proxyOpenAIBase
+      }
+
+      base.codexConfigToml = String(toml || '')
+      base.codexAuthJson = JSON.stringify(authObj, null, 2)
+      base.useCCSwitch = true
+      return { config: base, extraEnv }
+    }
+
+    if (type === 'opencode') {
+      const providerSettings = provider ? extractOpenCodeProviderFragment(provider.settingsConfig, provider.id) : null
+      const providerIdForConfig = provider?.id || providerId || 'ccswitch'
+
+      const baseDoc =
+        parseJsonObject(base?.opencodeConfigJson) ||
+        parseJsonObject(OPENCODE_CONFIG_TEMPLATE) || {
+          $schema: 'https://opencode.ai/config.json',
+          permission: OPENCODE_PERMISSION_TEMPLATE
+        }
+
+      if (!baseDoc.$schema) baseDoc.$schema = 'https://opencode.ai/config.json'
+      if (!baseDoc.permission || typeof baseDoc.permission !== 'object' || Array.isArray(baseDoc.permission)) {
+        baseDoc.permission = OPENCODE_PERMISSION_TEMPLATE
+      }
+
+      const providerBlock = ensureObject(baseDoc.provider)
+      const fragment = providerSettings ? clonePlain(providerSettings) : null
+
+      let nextFragment =
+        fragment ||
+        (useProxy && (proxyOpenAIBase || proxyOrigin)
+          ? {
+              npm: '@ai-sdk/openai-compatible',
+              name: 'CC Switch Proxy',
+              options: { baseURL: proxyOpenAIBase || proxyOrigin, apiKey: 'ccswitch' },
+              models: {}
+            }
+          : null)
+
+      if (useProxy && proxyOrigin) {
+        nextFragment = ensureObject(nextFragment)
+        nextFragment.options = ensureObject(nextFragment.options)
+        const npm = String(nextFragment.npm || '').toLowerCase()
+        const baseURL =
+          npm.includes('anthropic') || npm.includes('claude') || npm.includes('openrouter')
+            ? proxyOrigin
+            : proxyOpenAIBase || proxyOrigin
+        nextFragment.options.baseURL = baseURL
+        nextFragment.options.apiKey = 'ccswitch'
+      }
+
+      if (nextFragment) {
+        providerBlock[providerIdForConfig] = nextFragment
+      }
+      baseDoc.provider = providerBlock
+
+      base.opencodeConfigJson = JSON.stringify(baseDoc, null, 2)
+      base.useCCSwitch = true
+      return { config: base, extraEnv }
+    }
+
+    return { config: base, extraEnv }
+  }
   
-  createSession(config, workingDir, mainWindow) {
+  async createSession(config, workingDir, mainWindow) {
     const sessionId = uuidv4()
-    const type = typeof config?.type === 'string' ? config.type : ''
+    const resolved = await this.resolveCCSwitchRuntimeConfig(config)
+    const effectiveConfig = resolved?.config || config
+    const extraEnv = resolved?.extraEnv && typeof resolved.extraEnv === 'object' ? resolved.extraEnv : {}
+
+    const type = typeof effectiveConfig?.type === 'string' ? effectiveConfig.type : ''
     const isCodex = type === 'codex'
     const isClaudeCode = type === 'claude-code'
-    const cfgEnv = (isCodex || isClaudeCode) ? {} : this.normalizeEnvObject(config?.envVars)
+    const cfgEnv = (isCodex || isClaudeCode) ? {} : this.normalizeEnvObject(effectiveConfig?.envVars)
 
     // Working directory is selected only when creating a new tab/session.
     // Do not persist/associate it with the template/profile itself.
@@ -275,27 +515,27 @@ class PTYManager {
 
     // Only inject environment variables into the PowerShell session (per-process).
     // Source of truth is the user config JSON's env (stored as config.envVars).
-    const codexTempEnv = this.extractCodexTempEnvVars(config)
-    const env = { ...process.env, ...cfgEnv, ...codexTempEnv }
+    const codexTempEnv = this.extractCodexTempEnvVars(effectiveConfig)
+    const env = { ...process.env, ...cfgEnv, ...extraEnv, ...codexTempEnv }
 
-    const claudeProfileHome = this.syncClaudeProfileFiles(config)
+    const claudeProfileHome = this.syncClaudeProfileFiles(effectiveConfig)
     if (claudeProfileHome) {
       env.CLAUDE_CONFIG_DIR = claudeProfileHome
     }
 
-    const opencodeConfigPath = this.syncOpenCodeProfileFiles(config)
+    const opencodeConfigPath = this.syncOpenCodeProfileFiles(effectiveConfig)
     if (opencodeConfigPath) {
       env.OPENCODE_CONFIG = opencodeConfigPath
     }
 
     // Codex: create an isolated CODEX_HOME with per-template config.toml/auth.json,
     // then inject CODEX_HOME as a process-scoped env var (temporary, per session).
-    const profileHome = this.syncCodexProfileFiles(config)
-    const codexHome = this.ensureCodexHome(sessionId, config)
+    const profileHome = this.syncCodexProfileFiles(effectiveConfig)
+    const codexHome = this.ensureCodexHome(sessionId, effectiveConfig)
     let psArgs = []
     let psStartupCmd = ''
     if (codexHome) {
-      const configId = typeof config?.id === 'string' ? config.id.trim() : ''
+      const configId = typeof effectiveConfig?.id === 'string' ? effectiveConfig.id.trim() : ''
       if (configId) {
         env.MPS_CODEX_PROFILE_HOME = profileHome || path.join(app.getPath('userData'), 'codex-homes', configId)
       }
@@ -376,7 +616,7 @@ class PTYManager {
     })
 
     shellMonitor.registerSession(sessionId, type, {
-      configName: typeof config?.name === 'string' ? config.name : '',
+      configName: typeof effectiveConfig?.name === 'string' ? effectiveConfig.name : '',
       cwd
     })
     
@@ -398,7 +638,7 @@ class PTYManager {
     // mirror them via SetEnvironmentVariable so they're guaranteed to be visible in-session.
     // For Codex we avoid echoing a long "set env" command that confuses users.
     if (!isCodex && !isClaudeCode) {
-      this.applyEnvInPowerShellSession(ptyProcess, { ...cfgEnv }, config?.name || '')
+      this.applyEnvInPowerShellSession(ptyProcess, { ...cfgEnv }, effectiveConfig?.name || '')
     }
     
     return sessionId

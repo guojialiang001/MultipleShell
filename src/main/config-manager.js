@@ -426,6 +426,11 @@ class ConfigManager {
         ? rawOpenCodeConfig
         : (type === 'opencode' ? this.getOpenCodeConfigTemplate() : '')
 
+    const useCCSwitch = Boolean(config?.useCCSwitch)
+    const useCCSwitchProxy = Boolean(config?.useCCSwitchProxy)
+    const ccSwitchProviderId =
+      typeof config?.ccSwitchProviderId === 'string' ? config.ccSwitchProviderId : ''
+
     return {
       id,
       type,
@@ -433,6 +438,9 @@ class ConfigManager {
       // Working directory is not persisted in templates; it's chosen only when creating a new tab.
       workingDirectory: '',
       envVars,
+      useCCSwitch: useCCSwitch || useCCSwitchProxy,
+      useCCSwitchProxy,
+      ccSwitchProviderId,
       claudeSettingsJson: typeof claudeSettingsJson === 'string' ? claudeSettingsJson : '',
       codexConfigToml: typeof config?.codexConfigToml === 'string' ? config.codexConfigToml : '',
       codexAuthJson: typeof config?.codexAuthJson === 'string' ? config.codexAuthJson : '',
@@ -479,9 +487,9 @@ class ConfigManager {
   createDefaultConfigs() {
     const now = new Date().toISOString()
     return [
-      { id: uuidv4(), type: 'claude-code', name: 'Claude Code', workingDirectory: '', envVars: {}, claudeSettingsJson: this.getClaudeSettingsTemplate(), codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
-      { id: uuidv4(), type: 'codex', name: 'Codex', workingDirectory: '', envVars: {}, claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
-      { id: uuidv4(), type: 'opencode', name: 'OpenCode', workingDirectory: '', envVars: {}, claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: this.getOpenCodeConfigTemplate(), createdAt: now, updatedAt: now }
+      { id: uuidv4(), type: 'claude-code', name: 'Claude Code', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', claudeSettingsJson: this.getClaudeSettingsTemplate(), codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
+      { id: uuidv4(), type: 'codex', name: 'Codex', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
+      { id: uuidv4(), type: 'opencode', name: 'OpenCode', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: this.getOpenCodeConfigTemplate(), createdAt: now, updatedAt: now }
     ]
   }
 

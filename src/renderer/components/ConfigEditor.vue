@@ -13,7 +13,10 @@ const form = ref({
   id: null,
   type: '',
   name: '',
-  envVars: {}
+  envVars: {},
+  useCCSwitch: false,
+  useCCSwitchProxy: false,
+  ccSwitchProviderId: ''
 })
 
 const configJsonText = ref(JSON.stringify({ env: {} }, null, 2))
@@ -231,7 +234,10 @@ watch(
         envVars:
           (newConfig?.envVars && typeof newConfig.envVars === 'object' && !Array.isArray(newConfig.envVars))
             ? newConfig.envVars
-            : {}
+            : {},
+        useCCSwitch: Boolean(newConfig?.useCCSwitch),
+        useCCSwitchProxy: Boolean(newConfig?.useCCSwitchProxy),
+        ccSwitchProviderId: typeof newConfig?.ccSwitchProviderId === 'string' ? newConfig.ccSwitchProviderId : ''
       }
       lastLoadedConfigUpdatedAt.value = typeof newConfig?.updatedAt === 'string' ? newConfig.updatedAt : null
       const env =
@@ -255,7 +261,7 @@ watch(
       codexConfigTomlText.value = typeof newConfig?.codexConfigToml === 'string' ? newConfig.codexConfigToml : ''
       codexAuthJsonText.value = typeof newConfig?.codexAuthJson === 'string' ? newConfig.codexAuthJson : ''
     } else {
-      form.value = { id: null, type: '', name: '', envVars: {} }
+      form.value = { id: null, type: '', name: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '' }
       lastLoadedConfigUpdatedAt.value = null
       configJsonText.value = JSON.stringify({ env: {} }, null, 2)
       claudeSettingsJsonText.value = getClaudeSettingsTemplate()
@@ -277,6 +283,20 @@ watch(
     queueMicrotask(() => loadCodexDraftIfNewer())
   },
   { immediate: true }
+)
+
+watch(
+  () => form.value.useCCSwitchProxy,
+  (v) => {
+    if (v) form.value.useCCSwitch = true
+  }
+)
+
+watch(
+  () => form.value.useCCSwitch,
+  (v) => {
+    if (!v) form.value.useCCSwitchProxy = false
+  }
 )
 
 watch(
@@ -494,6 +514,28 @@ const save = () => {
           <div class="form-group">
           <label>{{ t('configEditor.name') }}</label>
           <input v-model="form.name" type="text" :placeholder="t('configEditor.placeholders.name')" />
+          </div>
+
+          <div class="form-group">
+            <label>{{ t('configEditor.ccSwitchTitle') }}</label>
+            <div class="ccswitch-row">
+              <label class="ccswitch-toggle">
+                <input type="checkbox" v-model="form.useCCSwitch" />
+                <span>{{ t('configSelector.useCCSwitch') }}</span>
+              </label>
+              <label class="ccswitch-toggle">
+                <input type="checkbox" v-model="form.useCCSwitchProxy" />
+                <span>{{ t('configSelector.useCCSwitchProxy') }}</span>
+              </label>
+            </div>
+            <div v-if="form.useCCSwitch" class="ccswitch-provider">
+              <label class="ccswitch-provider-label">{{ t('configEditor.ccSwitchProviderId') }}</label>
+              <input
+                v-model="form.ccSwitchProviderId"
+                type="text"
+                :placeholder="t('configEditor.ccSwitchProviderIdPlaceholder')"
+              />
+            </div>
           </div>
 
           <div v-if="!isCodex && !isClaudeCode && !isOpenCode" class="form-group">
@@ -782,6 +824,56 @@ h3 {
   margin-bottom: 20px;
 }
 
+.ccswitch-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ccswitch-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ccswitch-toggle:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ccswitch-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.ccswitch-provider {
+  margin-top: 12px;
+}
+
+.ccswitch-provider-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 label {
   display: block;
   margin-bottom: 8px;
@@ -801,36 +893,36 @@ label {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  background: #1a1a1a;
-  border: 1px solid #333333;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .select-trigger:hover {
-  border-color: #4a9eff;
-  background: #222222;
+  border-color: var(--primary-color);
+  background: var(--surface-hover);
 }
 
 .select-trigger.active {
-  border-color: #3b82f6;
-  background: #1a1a1a;
+  border-color: var(--primary-color);
+  background: var(--bg-color);
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
 }
 
 .select-value {
-  color: #f5f5f5;
+  color: var(--text-primary);
   font-size: 13px;
 }
 
 .select-value.placeholder {
-  color: #666666;
+  color: var(--text-secondary);
 }
 
 .select-arrow {
-  color: #888888;
+  color: var(--text-secondary);
   transition: transform 0.2s ease;
 }
 
@@ -844,8 +936,8 @@ label {
   left: 0;
   right: 0;
   margin-top: 4px;
-  background: #1e1e1e;
-  border: 1px solid #333333;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
   overflow: hidden;
@@ -859,18 +951,18 @@ label {
   padding: 12px 16px;
   cursor: pointer;
   transition: all 0.15s ease;
-  color: #a3a3a3;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
 .dropdown-item:hover {
-  background: #2a2a2a;
-  color: #ffffff;
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
 .dropdown-item.selected {
   background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
+  color: var(--primary-color);
   font-weight: 500;
 }
 
@@ -879,7 +971,7 @@ label {
 }
 
 .check-icon {
-  color: #60a5fa;
+  color: var(--primary-color);
 }
 
 .dropdown-enter-active,
