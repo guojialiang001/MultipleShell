@@ -110,7 +110,12 @@ export default {
     ccswitchSectionTitle: 'CC Switch',
     manage: '管理配置',
     back: '返回',
-    importFromCCSwitch: '\u4ece CC Switch \u5bfc\u5165',
+    importFromCCSwitch: '\u4ece CC Switch \u8986\u76d6\u5bfc\u5165',
+    importFromCCSwitchConfirm:
+      '\u5c06\u8986\u76d6\u540c\u6b65 CC Switch \u914d\u7f6e\u6a21\u677f\uff08\u5305\u62ec CC Switch \u4e2d\u5df2\u5220\u9664\u7684\uff09\u3002\n\n\u4ec5\u4f1a\u5f71\u54cd ID \u4ee5 \"ccswitch-\" \u5f00\u5934\u7684\u914d\u7f6e\u6a21\u677f\uff0c\u4e0d\u4f1a\u5f71\u54cd\u4f60\u624b\u52a8\u521b\u5efa\u7684\u914d\u7f6e\u3002\n\n\u786e\u5b9a\u8981\u7ee7\u7eed\u5417\uff1f',
+    ccswitchImportedTag: 'CC Switch',
+    ccswitchImportedHint:
+      '\u4ece CC Switch \u8986\u76d6\u5bfc\u5165\u7684\u914d\u7f6e\u3002\u4e0b\u6b21\u8986\u76d6\u5bfc\u5165\u65f6\u53ef\u80fd\u4f1a\u88ab\u66f4\u65b0\u6216\u5220\u9664\u3002',
     useCCSwitch: '\u4f7f\u7528 CC Switch',
     useCCSwitchProxy: '\u8d70 CC Switch \u4ee3\u7406',
     onlyCCSwitchConfigs: '\u53ea\u4f7f\u7528CCSwitch\u914d\u7f6e',
@@ -119,6 +124,9 @@ export default {
     ccswitchStatus: 'CCSwitch',
     ccswitchProxy: '\u4ee3\u7406',
     ccswitchFailover: '\u6545\u969c\u8f6c\u79fb',
+    ccswitchProxyAddress: '\u4ee3\u7406\u5730\u5740',
+    ccswitchRequestPaths: '\u8bf7\u6c42\u8def\u5f84',
+    ccswitchNoRequests: '\u6682\u65e0\u8bf7\u6c42\uff08\u8bf7\u68c0\u67e5 CC Switch \u65e5\u5fd7\u8bbe\u7f6e\uff09',
     ccswitchDetecting: '\u68c0\u6d4b\u4e2d...',
     ccswitchEnabled: '\u5df2\u542f\u7528',
     ccswitchDisabled: '\u672a\u542f\u7528',
@@ -151,6 +159,8 @@ export default {
     codexConfigToml: 'Codex config.toml',
     codexAuthJson: 'Codex auth.json',
     opencodeConfigJson: 'OpenCode config.json',
+    ccswitchImportedHint:
+      '\u63d0\u793a\uff1a\u5f53\u524d\u914d\u7f6e\u6765\u81ea CC Switch \u8986\u76d6\u5bfc\u5165\uff0c\u4e0b\u6b21\u8986\u76d6\u5bfc\u5165\u65f6\u53ef\u80fd\u4f1a\u88ab\u66f4\u65b0\u6216\u5220\u9664\u3002',
     selectType: '选择类型...',
     cancel: '取消',
     saveConfiguration: '保存配置',

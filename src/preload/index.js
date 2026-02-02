@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getConfigs: () => ipcRenderer.invoke('get-configs'),
   ccSwitchListProviders: () => ipcRenderer.invoke('ccswitch:listProviders'),
   ccSwitchImportProviders: () => ipcRenderer.invoke('ccswitch:importProviders'),
+  ccSwitchTailRequestPaths: (payload) => ipcRenderer.invoke('ccswitch:tailRequestPaths', payload),
   saveConfig: (config) => ipcRenderer.invoke('save-config', config),
   deleteConfig: (configId) => ipcRenderer.invoke('delete-config', configId),
   createTerminal: (config, workingDir) => ipcRenderer.invoke('create-terminal', config, workingDir),

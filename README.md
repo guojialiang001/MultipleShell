@@ -13,6 +13,7 @@
 - 多实例安全：Client 使用独立 `userData`（避免 Chromium profile 并发），configs/drafts/monitor/update/voice 等“有状态写入/副作用”统一收敛到 Host。
 - 新建/关闭保护：新建标签支持“pending”占位；通过 UI 关闭标签/关闭窗口需要输入 `close` 二次确认，避免误操作。
 - 配置模板（仅 3 种类型）：`claude-code` / `codex` / `opencode`。
+- CC Switch 集成（可选）：从 CC Switch 读取 providers/proxy/failover 配置；一键覆盖导入为模板；创建会话时可“跟随当前 provider”或“走 CC Switch 代理”（配合自动故障转移）。
 - 配置管理：模板列表、创建/编辑/删除（删除有确认弹窗）。
 - Tab 级工作目录：创建会话时可选择工作目录；主进程会拦截系统敏感目录（如 `C:\\Windows\\System32`、`C:\\Program Files` 等）。
 - 语音输入：录音 -> 调用转写接口 -> 结果直接写入当前终端输入流。
@@ -34,6 +35,7 @@
 - 预加载：`src/preload/`
 - 渲染进程：Vue 3 + Vite，终端渲染使用 xterm.js
 - PTY：`node-pty`（当前默认启动 PowerShell）
+- CC Switch 读取：`sql.js`（WASM SQLite，用于读取 CC Switch 的 `cc-switch.db`）
 - 打包：electron-builder（NSIS）
 
 ## 快速开始
@@ -93,6 +95,15 @@ node .\\scripts\\monitor-stresscheck.js
 2. 选择一个配置模板（Claude Code / Codex / OpenCode）。
 3. 可选：点击“浏览”选择工作目录（主进程会阻止选择系统目录）。
 4. 创建后会启动一个 PowerShell 会话，并在当前 Tab 内显示。
+
+### CC Switch（可选）
+
+- 用途：复用 CC Switch 的 providers/代理/故障转移配置，在 MultipleShell 中一键导入并创建会话。
+- 配置目录：默认 `~/.cc-switch`；Windows 会尝试从 `%APPDATA%\\com.ccswitch.desktop\\app_paths.json` 自动探测；可用 `MPS_CC_SWITCH_CONFIG_DIR`（或 `CC_SWITCH_CONFIG_DIR`）覆盖。
+- 一键导入：在“管理配置”里点击“从 CC Switch 覆盖导入”，会同步（含删除）所有以 `ccswitch-` 开头的模板，不影响你手动创建的模板。
+- 运行方式：
+  - “使用 CC Switch”：在创建会话时将 CC Switch 的 provider 配置合并到当前模板；`CC Switch Provider ID` 留空表示跟随 CC Switch 当前 provider。
+  - “走 CC Switch 代理”：将请求指向 CC Switch proxy（配合 CC Switch 的 auto-failover；需在 CC Switch 中启用 proxy）；OpenCode 使用 CC Switch 的 Codex proxy 配置。
 
 ### 多实例同步（桌面端 + RemoteApp）
 
@@ -252,6 +263,7 @@ node .\\scripts\\monitor-stresscheck.js
 ## 环境变量（排查/开发用）
 
 - `MPS_AGENT_PIPE`：覆盖本机 agent 的 Named Pipe 名（默认按当前用户派生，桌面端与 RemoteApp 端共享同一条 pipe）。
+- `MPS_CC_SWITCH_CONFIG_DIR` / `CC_SWITCH_CONFIG_DIR`：覆盖 CC Switch 配置目录（用于读取 `cc-switch.db`）。
 - `MPS_UPDATE_URL`：启用自动更新（generic feed）。
 - `MPS_UPDATE_DEV=1`：开发环境允许启用更新。
 - `MPS_REMOTEAPP_EXE_PATH`：RemoteApp 注册时强制指定 `MultipleShell.exe` 路径（开发/自定义安装路径排查用）。

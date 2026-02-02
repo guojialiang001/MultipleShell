@@ -91,6 +91,7 @@ const resolveConfigDir = () => {
 }
 
 const resolveDbPath = (configDir) => path.join(configDir, 'cc-switch.db')
+const resolveLogPath = (configDir) => path.join(configDir, 'logs', 'cc-switch.log')
 
 const safeJsonParse = (value, fallback) => {
   try {
@@ -191,7 +192,7 @@ async function listProviders() {
       db.exec(
         `SELECT id, app_type, name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta, is_current, in_failover_queue
          FROM providers
-         ORDER BY app_type, COALESCE(sort_index, 999999), created_at ASC, id ASC`
+         ORDER BY app_type, COALESCE(sort_index, 999999), id ASC`
       )
     )
 
@@ -383,6 +384,7 @@ function toMultipleShellConfigs(providerSnapshot) {
       id: `ccswitch-claude-${sanitizeId(p.id)}`,
       type: 'claude-code',
       name: `CC Switch - ${p.name || p.id}`,
+      importSource: 'ccswitch',
       useCCSwitch: true,
       useCCSwitchProxy: false,
       ccSwitchProviderId: p.id,
@@ -403,6 +405,7 @@ function toMultipleShellConfigs(providerSnapshot) {
       id: `ccswitch-codex-${sanitizeId(p.id)}`,
       type: 'codex',
       name: `CC Switch - ${p.name || p.id}`,
+      importSource: 'ccswitch',
       useCCSwitch: true,
       useCCSwitchProxy: false,
       ccSwitchProviderId: p.id,
@@ -428,6 +431,7 @@ function toMultipleShellConfigs(providerSnapshot) {
       id: `ccswitch-opencode-${sanitizeId(p.id)}`,
       type: 'opencode',
       name: `CC Switch - ${p.name || p.id}`,
+      importSource: 'ccswitch',
       useCCSwitch: true,
       useCCSwitchProxy: false,
       ccSwitchProviderId: p.id,
@@ -442,13 +446,64 @@ function toMultipleShellConfigs(providerSnapshot) {
   return out
 }
 
-async function importProviders(configManager) {
+async function importProviders(configManager, options = {}) {
   if (!configManager || typeof configManager.saveConfig !== 'function') {
     throw new Error('importProviders requires configManager')
   }
 
-  const snapshot = await listProviders()
-  const configs = toMultipleShellConfigs(snapshot)
+  const snapshot = options && typeof options === 'object' && options.snapshot ? options.snapshot : await listProviders()
+  const configs = toMultipleShellConfigs(snapshot).map((cfg) => {
+    const next = cfg && typeof cfg === 'object' ? { ...cfg } : cfg
+    if (!next || typeof next !== 'object') return next
+
+    const type = typeof next.type === 'string' ? next.type : ''
+    const proxyAppKey = type === 'claude-code' ? 'claude' : type === 'codex' ? 'codex' : type === 'opencode' ? 'codex' : ''
+    const proxyCfg = proxyAppKey ? snapshot?.proxy?.[proxyAppKey] : null
+
+    // If CC Switch proxy + auto-failover is enabled for this app, default imports to using the proxy.
+    // This makes the terminal clients send requests directly to the CC Switch proxy address, which is
+    // required for failover semantics to take effect.
+    const proxyEnabled = Boolean(proxyCfg && proxyCfg.proxyEnabled)
+    const enabled = Boolean(proxyCfg && proxyCfg.enabled)
+    const autoFailoverEnabled = Boolean(proxyCfg && proxyCfg.autoFailoverEnabled)
+    const shouldUseProxy = proxyEnabled && enabled && autoFailoverEnabled
+
+    if (shouldUseProxy) {
+      next.useCCSwitch = true
+      next.useCCSwitchProxy = true
+    }
+
+    return next
+  })
+
+  // "Overwrite import": remove previously imported CC Switch templates first,
+  // then re-import from the current CC Switch snapshot.
+  // This keeps the app in sync (including removals) and avoids stale templates.
+  try {
+    const existing = typeof configManager.loadConfigs === 'function' ? configManager.loadConfigs() : []
+    const list = Array.isArray(existing) ? existing : []
+    const isImportedFromCCSwitch = (cfg) => {
+      if (!cfg || typeof cfg !== 'object') return false
+      if (cfg.importSource === 'ccswitch') return true
+      // Back-compat: stable prefix + provider id indicates an imported CC Switch template.
+      const id = typeof cfg.id === 'string' ? cfg.id : ''
+      const providerId = typeof cfg.ccSwitchProviderId === 'string' ? cfg.ccSwitchProviderId.trim() : ''
+      return id.startsWith('ccswitch-') && Boolean(providerId)
+    }
+
+    const importedIds = list
+      .filter(isImportedFromCCSwitch)
+      .map((c) => c.id)
+      .filter((id) => typeof id === 'string' && id.trim())
+
+    if (typeof configManager.deleteConfig === 'function') {
+      for (const id of importedIds) {
+        try {
+          configManager.deleteConfig(id)
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
 
   for (const cfg of configs) {
     configManager.saveConfig(cfg)
@@ -460,6 +515,56 @@ async function importProviders(configManager) {
 module.exports = {
   listProviders,
   importProviders,
-  toMultipleShellConfigs
+  toMultipleShellConfigs,
+  tailRequestPaths
+}
+
+function tailRequestPaths(options = {}) {
+  const { configDir } = resolveConfigDir()
+  const logPath = resolveLogPath(configDir)
+  const appType = typeof options?.appType === 'string' ? options.appType.trim().toLowerCase() : ''
+  const limitRaw = options?.limit == null ? 50 : Number(options.limit)
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(200, Math.floor(limitRaw)) : 50
+  const maxBytes = 256 * 1024
+
+  if (!fs.existsSync(logPath)) return { logPath, lines: [] }
+
+  let text = ''
+  try {
+    const stat = fs.statSync(logPath)
+    const size = stat.size || 0
+    const start = size > maxBytes ? size - maxBytes : 0
+    const fd = fs.openSync(logPath, 'r')
+    try {
+      const buf = Buffer.alloc(size - start)
+      fs.readSync(fd, buf, 0, buf.length, start)
+      text = buf.toString('utf8')
+    } finally {
+      try { fs.closeSync(fd) } catch (_) {}
+    }
+  } catch (_) {
+    try {
+      text = fs.readFileSync(logPath, 'utf8')
+    } catch (_) {
+      return { logPath, lines: [] }
+    }
+  }
+
+  const out = []
+  const rows = String(text || '').split(/\r?\n/).filter(Boolean)
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const line = rows[i]
+    const idx = line.indexOf('[REQ]')
+    if (idx < 0) continue
+    const m = line.slice(idx).match(/^\[REQ\]\s+app=([a-z0-9_-]+)\s+path=(.+)$/i)
+    if (!m) continue
+    const a = String(m[1] || '').trim().toLowerCase()
+    const p = String(m[2] || '').trim()
+    if (appType && a !== appType) continue
+    out.push({ appType: a, path: p, raw: line })
+    if (out.length >= limit) break
+  }
+
+  return { logPath, lines: out.reverse() }
 }
 

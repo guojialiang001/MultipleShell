@@ -410,6 +410,7 @@ app.whenReady().then(async () => {
 
       if (method === 'ccswitch.providers.list') return ccSwitch.listProviders()
       if (method === 'ccswitch.providers.import') return ccSwitch.importProviders(configManager)
+      if (method === 'ccswitch.requests.tail') return ccSwitch.tailRequestPaths(params || {})
 
       if (method === 'drafts.load') return draftManager.loadDraft(params?.key)
       if (method === 'drafts.save') return draftManager.saveDraft(params?.key, params?.value)
@@ -519,6 +520,11 @@ ipcMain.handle('ccswitch:listProviders', async () => {
 ipcMain.handle('ccswitch:importProviders', async () => {
   if (agent && agent.role === 'client') return agent.call('ccswitch.providers.import', {})
   return ccSwitch.importProviders(configManager)
+})
+
+ipcMain.handle('ccswitch:tailRequestPaths', async (_event, payload) => {
+  if (agent && agent.role === 'client') return agent.call('ccswitch.requests.tail', payload || {})
+  return ccSwitch.tailRequestPaths(payload || {})
 })
 
 ipcMain.handle('create-terminal', async (event, config, workingDir) => {

@@ -431,6 +431,20 @@ class ConfigManager {
     const ccSwitchProviderId =
       typeof config?.ccSwitchProviderId === 'string' ? config.ccSwitchProviderId : ''
 
+    const importSource = (() => {
+      const raw = typeof config?.importSource === 'string' ? config.importSource.trim().toLowerCase() : ''
+      if (raw === 'ccswitch') return 'ccswitch'
+
+      // Back-compat: older CC Switch imports used a stable id prefix and provider id.
+      const name = typeof config?.name === 'string' ? config.name : ''
+      const hasLegacyId = typeof id === 'string' && id.startsWith('ccswitch-')
+      const hasProviderId = typeof ccSwitchProviderId === 'string' && ccSwitchProviderId.trim()
+      const looksLikeCCSwitch = name.startsWith('CC Switch - ')
+      if (hasLegacyId && hasProviderId && looksLikeCCSwitch) return 'ccswitch'
+
+      return ''
+    })()
+
     return {
       id,
       type,
@@ -441,6 +455,7 @@ class ConfigManager {
       useCCSwitch: useCCSwitch || useCCSwitchProxy,
       useCCSwitchProxy,
       ccSwitchProviderId,
+      importSource,
       claudeSettingsJson: typeof claudeSettingsJson === 'string' ? claudeSettingsJson : '',
       codexConfigToml: typeof config?.codexConfigToml === 'string' ? config.codexConfigToml : '',
       codexAuthJson: typeof config?.codexAuthJson === 'string' ? config.codexAuthJson : '',
@@ -487,9 +502,9 @@ class ConfigManager {
   createDefaultConfigs() {
     const now = new Date().toISOString()
     return [
-      { id: uuidv4(), type: 'claude-code', name: 'Claude Code', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', claudeSettingsJson: this.getClaudeSettingsTemplate(), codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
-      { id: uuidv4(), type: 'codex', name: 'Codex', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
-      { id: uuidv4(), type: 'opencode', name: 'OpenCode', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: this.getOpenCodeConfigTemplate(), createdAt: now, updatedAt: now }
+      { id: uuidv4(), type: 'claude-code', name: 'Claude Code', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', importSource: '', claudeSettingsJson: this.getClaudeSettingsTemplate(), codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
+      { id: uuidv4(), type: 'codex', name: 'Codex', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', importSource: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
+      { id: uuidv4(), type: 'opencode', name: 'OpenCode', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', importSource: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: this.getOpenCodeConfigTemplate(), createdAt: now, updatedAt: now }
     ]
   }
 

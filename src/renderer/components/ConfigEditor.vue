@@ -14,6 +14,7 @@ const form = ref({
   type: '',
   name: '',
   envVars: {},
+  importSource: '',
   useCCSwitch: false,
   useCCSwitchProxy: false,
   ccSwitchProviderId: ''
@@ -80,6 +81,8 @@ onUnmounted(() => {
 const isCodex = computed(() => form.value.type === 'codex')
 const isClaudeCode = computed(() => form.value.type === 'claude-code')
 const isOpenCode = computed(() => form.value.type === 'opencode')
+
+const isCCSwitchImported = computed(() => String(form.value.importSource || '') === 'ccswitch')
 
 const getTemplateJsonForType = (type) => {
   return JSON.stringify({ env: {} }, null, 2)
@@ -235,6 +238,7 @@ watch(
           (newConfig?.envVars && typeof newConfig.envVars === 'object' && !Array.isArray(newConfig.envVars))
             ? newConfig.envVars
             : {},
+        importSource: typeof newConfig?.importSource === 'string' ? newConfig.importSource : '',
         useCCSwitch: Boolean(newConfig?.useCCSwitch),
         useCCSwitchProxy: Boolean(newConfig?.useCCSwitchProxy),
         ccSwitchProviderId: typeof newConfig?.ccSwitchProviderId === 'string' ? newConfig.ccSwitchProviderId : ''
@@ -261,7 +265,7 @@ watch(
       codexConfigTomlText.value = typeof newConfig?.codexConfigToml === 'string' ? newConfig.codexConfigToml : ''
       codexAuthJsonText.value = typeof newConfig?.codexAuthJson === 'string' ? newConfig.codexAuthJson : ''
     } else {
-      form.value = { id: null, type: '', name: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '' }
+      form.value = { id: null, type: '', name: '', envVars: {}, importSource: '', useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '' }
       lastLoadedConfigUpdatedAt.value = null
       configJsonText.value = JSON.stringify({ env: {} }, null, 2)
       claudeSettingsJsonText.value = getClaudeSettingsTemplate()
@@ -483,6 +487,9 @@ const save = () => {
     
     <div class="content-body" :class="{ 'codex-split': codexSplit }">
       <div class="left-pane">
+          <div v-if="isCCSwitchImported" class="ccswitch-imported-callout">
+            {{ t('configEditor.ccswitchImportedHint') }}
+          </div>
           <div class="form-group">
           <label>{{ t('configEditor.type') }}</label>
           <div class="custom-select" ref="dropdownRef">
@@ -696,6 +703,18 @@ const save = () => {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border-color);
   background: var(--surface-hover);
+}
+
+.ccswitch-imported-callout {
+  margin: 0 0 14px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(250, 204, 21, 0.28);
+  background: rgba(250, 204, 21, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 h3 {

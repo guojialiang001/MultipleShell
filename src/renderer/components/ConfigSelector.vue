@@ -1,7 +1,12 @@
 <script setup>
-import { ref, watch, computed, onMounted } from 'vue'
+import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ConfigEditor from './ConfigEditor.vue'
+import {
+  resolveCCSwitchProxyStatus,
+  pickDefaultCCSwitchTemplate,
+  computeFailoverPriorityByProviderId
+} from '../utils/ccswitch-status.mjs'
 
 const props = defineProps({
   mode: { type: String, default: 'create' }, // create | manage | edit
@@ -18,6 +23,7 @@ const showEditor = ref(false)
 const editingConfig = ref(null)
 const isSelectingFolder = ref(false)
 const showDeleteConfirm = ref(false)
+const showImportConfirm = ref(false)
 const deleteCandidate = ref(null)
 const activeType = ref('claude-code')
 
@@ -51,6 +57,10 @@ const autoDetectCCSwitchStatus = ref(readBool(CCSWITCH_AUTODETECT_KEY, true))
 const ccSwitchDetectState = ref('idle') // idle | loading | ready | error
 const ccSwitchProxyEnabled = ref(null) // boolean | null
 const ccSwitchFailoverEnabled = ref(null) // boolean | null
+const ccSwitchFailoverPriorityById = ref({}) // { [providerId]: number }
+const ccSwitchProxyAddress = ref('') // string
+const ccSwitchRequestLogPath = ref('') // string
+const ccSwitchRecentRequests = ref([]) // Array<{ appType: string, path: string, raw: string }>
 const ccSwitchDetectError = ref('')
 
 const resolveProxyAppKeyForType = (type) => {
@@ -66,12 +76,41 @@ const resetCCSwitchStatus = () => {
   ccSwitchDetectState.value = 'idle'
   ccSwitchProxyEnabled.value = null
   ccSwitchFailoverEnabled.value = null
+  ccSwitchFailoverPriorityById.value = {}
+  ccSwitchProxyAddress.value = ''
+  ccSwitchRequestLogPath.value = ''
+  ccSwitchRecentRequests.value = []
   ccSwitchDetectError.value = ''
+}
+
+const normalizeProxyHost = (host) => {
+  const raw = String(host || '').trim()
+  if (!raw) return '127.0.0.1'
+  const lower = raw.toLowerCase()
+  if (lower === '0.0.0.0' || lower === '::' || lower === '[::]') return '127.0.0.1'
+  return raw
+}
+
+const buildProxyOrigin = (host, port) => {
+  const safeHost = normalizeProxyHost(host)
+  const p = Number(port)
+  const safePort = Number.isFinite(p) && p > 0 ? p : 15721
+  const hostPart = safeHost.includes(':') && !safeHost.startsWith('[') ? `[${safeHost}]` : safeHost
+  return `http://${hostPart}:${safePort}`
+}
+
+const resolveProviderAppKeyForType = (type) => {
+  const t = normalizeType(type)
+  if (t === 'claude-code') return 'claude'
+  if (t === 'codex') return 'codex'
+  if (t === 'opencode') return 'opencode'
+  return null
 }
 
 const refreshCCSwitchStatus = async () => {
   if (props.mode !== 'create') return
   if (!autoDetectCCSwitchStatus.value) return
+  if (ccSwitchDetectState.value === 'loading') return
 
   const api = window?.electronAPI
   if (!api?.ccSwitchListProviders) {
@@ -88,16 +127,70 @@ const refreshCCSwitchStatus = async () => {
     const proxyAppKey = resolveProxyAppKeyForType(activeType.value)
     const proxyCfg = proxyAppKey ? snapshot?.proxy?.[proxyAppKey] : null
 
-    ccSwitchProxyEnabled.value = proxyCfg ? Boolean(proxyCfg.proxyEnabled) : null
-    ccSwitchFailoverEnabled.value = proxyCfg ? Boolean(proxyCfg.autoFailoverEnabled) : null
+    const { proxyEnabled, failoverEnabled } = resolveCCSwitchProxyStatus(proxyCfg)
+    ccSwitchProxyEnabled.value = proxyEnabled
+    ccSwitchFailoverEnabled.value = failoverEnabled
+    ccSwitchProxyAddress.value = proxyCfg ? buildProxyOrigin(proxyCfg.listenAddress, proxyCfg.listenPort) : ''
+
+    const providerAppKey = resolveProviderAppKeyForType(activeType.value)
+    const providers = providerAppKey ? snapshot?.apps?.[providerAppKey]?.providers : null
+    ccSwitchFailoverPriorityById.value = computeFailoverPriorityByProviderId(providers)
+
     ccSwitchDetectState.value = 'ready'
   } catch (err) {
     ccSwitchDetectState.value = 'error'
     ccSwitchProxyEnabled.value = null
     ccSwitchFailoverEnabled.value = null
+    ccSwitchFailoverPriorityById.value = {}
+    ccSwitchProxyAddress.value = ''
     ccSwitchDetectError.value = err?.message ? String(err.message) : String(err || 'Unknown error')
   }
 }
+
+const ccSwitchRequestsState = ref('idle') // idle | loading | ready | error
+let ccSwitchRequestsTimer = null
+
+const stopCCSwitchRequestsPolling = () => {
+  if (!ccSwitchRequestsTimer) return
+  clearInterval(ccSwitchRequestsTimer)
+  ccSwitchRequestsTimer = null
+}
+
+const refreshCCSwitchRecentRequests = async () => {
+  if (props.mode !== 'create') return
+  if (!autoDetectCCSwitchStatus.value) return
+  if (ccSwitchRequestsState.value === 'loading') return
+
+  const api = window?.electronAPI
+  if (!api?.ccSwitchTailRequestPaths) return
+
+  ccSwitchRequestsState.value = 'loading'
+  try {
+    const result = await api.ccSwitchTailRequestPaths({ limit: 30 })
+    ccSwitchRequestLogPath.value = typeof result?.logPath === 'string' ? result.logPath : ''
+    ccSwitchRecentRequests.value = Array.isArray(result?.lines) ? result.lines : []
+    ccSwitchRequestsState.value = 'ready'
+  } catch (_) {
+    ccSwitchRequestsState.value = 'error'
+  }
+}
+
+const CCSWITCH_REQUESTS_POLL_MS = 2000
+const startCCSwitchRequestsPolling = () => {
+  stopCCSwitchRequestsPolling()
+  ccSwitchRequestsTimer = setInterval(() => {
+    refreshCCSwitchRecentRequests()
+  }, CCSWITCH_REQUESTS_POLL_MS)
+}
+
+watch(
+  [() => props.mode, autoDetectCCSwitchStatus],
+  ([mode, autoDetect]) => {
+    if (mode === 'create' && autoDetect) startCCSwitchRequestsPolling()
+    else stopCCSwitchRequestsPolling()
+  },
+  { immediate: true }
+)
 
 const typeTabs = computed(() => [
   { value: 'claude-code', label: t('configEditor.types.claudeCode') },
@@ -115,6 +208,43 @@ const filteredTemplates = computed(() => {
 
   return list.filter((cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy))
 })
+
+const getVisibleTemplatesForType = (templates, type) => {
+  const current = normalizeType(type)
+  const list = (Array.isArray(templates) ? templates : []).filter((cfg) => normalizeType(cfg?.type) === current)
+
+  if (props.mode !== 'create') return list
+  if (!onlyCCSwitchConfigs.value) return list
+
+  return list.filter((cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy))
+}
+
+const canAutoPickCCSwitchTemplate = computed(() => {
+  if (props.mode !== 'create') return false
+  if (!onlyCCSwitchConfigs.value) return false
+  return ccSwitchProxyEnabled.value === true && ccSwitchFailoverEnabled.value === true
+})
+
+const autoPickCandidate = computed(() => pickDefaultCCSwitchTemplate(filteredTemplates.value))
+
+const isCCSwitchImportedConfig = (cfg) => {
+  if (!cfg || typeof cfg !== 'object') return false
+  if (cfg.importSource === 'ccswitch') return true
+  const id = typeof cfg.id === 'string' ? cfg.id : ''
+  const providerId = typeof cfg.ccSwitchProviderId === 'string' ? cfg.ccSwitchProviderId.trim() : ''
+  return id.startsWith('ccswitch-') && Boolean(providerId)
+}
+
+const getCCSwitchPriorityTag = (cfg) => {
+  if (!canAutoPickCCSwitchTemplate.value) return ''
+  if (!cfg || typeof cfg !== 'object') return ''
+  if (!cfg.useCCSwitch && !cfg.useCCSwitchProxy) return ''
+  const id = typeof cfg.ccSwitchProviderId === 'string' ? cfg.ccSwitchProviderId.trim() : ''
+  if (!id) return ''
+  const p = ccSwitchFailoverPriorityById.value?.[id]
+  if (!Number.isFinite(p) || p <= 0) return ''
+  return `P${p}`
+}
 
 watch(
   () => props.mode,
@@ -151,13 +281,21 @@ watch(autoDetectCCSwitchStatus, async (v) => {
 })
 
 watch(
-  () => props.configTemplates,
-  (templates) => {
-    const list = Array.isArray(templates) ? templates : []
-    const types = new Set(list.map((c) => normalizeType(c?.type)).filter((t) => TYPE_ORDER.includes(t)))
-    if (types.size === 0) return
-    if (types.has(normalizeType(activeType.value))) return
-    activeType.value = TYPE_ORDER.find((t) => types.has(t)) || 'claude-code'
+  [() => props.configTemplates, () => props.mode, onlyCCSwitchConfigs],
+  ([templates]) => {
+    // Auto-switch the type tab when the current one has no visible templates.
+    // This avoids forcing the user to click a "system/type" tab when "Only CC Switch configs" is enabled.
+    if (props.mode !== 'create') return
+
+    const currentVisible = getVisibleTemplatesForType(templates, activeType.value)
+    if (currentVisible.length > 0) return
+
+    const nextType = TYPE_ORDER.find((t) => getVisibleTemplatesForType(templates, t).length > 0) || null
+    if (!nextType) return
+
+    if (normalizeType(nextType) !== normalizeType(activeType.value)) {
+      activeType.value = nextType
+    }
   },
   { immediate: true, deep: true }
 )
@@ -166,6 +304,17 @@ watch(activeType, () => {
   selectedConfig.value = null
   refreshCCSwitchStatus()
 })
+
+watch(
+  [canAutoPickCCSwitchTemplate, autoPickCandidate],
+  ([canAutoPick, candidate]) => {
+    if (!canAutoPick) return
+    if (!candidate) return
+    if (selectedConfig.value) return
+    selectedConfig.value = candidate
+  },
+  { immediate: true }
+)
 
 watch(
   () => props.currentTabConfig,
@@ -198,8 +347,9 @@ const toPlain = (obj) => {
 }
 
 const createTerminal = () => {
-  if (!selectedConfig.value) return
-  emit('create', toPlain(selectedConfig.value), customWorkingDir.value)
+  const cfg = selectedConfig.value || autoPickCandidate.value
+  if (!cfg) return
+  emit('create', toPlain(cfg), customWorkingDir.value)
 }
 
 const saveConfig = async (config) => {
@@ -247,6 +397,18 @@ const confirmDeleteTemplate = async () => {
   cancelDeleteTemplate()
 }
 
+const promptImportFromCCSwitch = () => {
+  showImportConfirm.value = true
+}
+
+const cancelImportFromCCSwitch = () => {
+  showImportConfirm.value = false
+}
+
+const confirmImportFromCCSwitch = async () => {
+  await emit('importFromCCSwitch')
+  cancelImportFromCCSwitch()
+}
 
 const close = () => emit('close')
 const switchMode = (mode) => emit('switchMode', mode)
@@ -264,8 +426,39 @@ const ccSwitchStatusText = (value) => {
   return t('configSelector.ccswitchUnknown')
 }
 
+const CCSWITCH_POLL_MS = 30_000
+let ccSwitchPollTimer = null
+
+const stopCCSwitchPolling = () => {
+  if (!ccSwitchPollTimer) return
+  clearInterval(ccSwitchPollTimer)
+  ccSwitchPollTimer = null
+}
+
+const startCCSwitchPolling = () => {
+  stopCCSwitchPolling()
+  ccSwitchPollTimer = setInterval(() => {
+    refreshCCSwitchStatus()
+  }, CCSWITCH_POLL_MS)
+}
+
+watch(
+  [() => props.mode, autoDetectCCSwitchStatus],
+  ([mode, autoDetect]) => {
+    if (mode === 'create' && autoDetect) startCCSwitchPolling()
+    else stopCCSwitchPolling()
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
   refreshCCSwitchStatus()
+  refreshCCSwitchRecentRequests()
+})
+
+onBeforeUnmount(() => {
+  stopCCSwitchPolling()
+  stopCCSwitchRequestsPolling()
 })
 </script>
 
@@ -275,7 +468,7 @@ onMounted(() => {
       <h3>{{ headerTitle }}</h3>
       <div class="header-actions">
         <button v-if="mode === 'create'" class="btn-ghost" @click="switchMode('manage')">{{ t('configSelector.manage') }}</button>
-        <button v-if="mode === 'manage'" class="btn-ghost" @click="emit('importFromCCSwitch')">{{ t('configSelector.importFromCCSwitch') }}</button>
+        <button v-if="mode === 'manage'" class="btn-ghost" @click="promptImportFromCCSwitch">{{ t('configSelector.importFromCCSwitch') }}</button>
         <button v-if="mode === 'manage'" class="btn-ghost" @click="switchMode('create')">{{ t('configSelector.back') }}</button>
         <button class="btn-icon" @click="close" :title="t('configSelector.close')">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -337,6 +530,31 @@ onMounted(() => {
               </span>
             </div>
 
+            <div v-if="ccSwitchProxyAddress" class="category-item status-item">
+              <span class="status-label">{{ t('configSelector.ccswitchProxyAddress') }}</span>
+              <span class="status-values">
+                <span class="status-pill status-pill--mono">{{ ccSwitchProxyAddress }}</span>
+              </span>
+            </div>
+
+            <div v-if="ccSwitchRecentRequests && ccSwitchRecentRequests.length > 0" class="category-item status-item">
+              <span class="status-label">{{ t('configSelector.ccswitchRequestPaths') }}</span>
+              <span class="status-values status-values--stack">
+                <span v-for="(r, idx) in ccSwitchRecentRequests" :key="`${r?.raw || ''}:${idx}`" class="status-pill status-pill--mono">
+                  {{ r.appType }} {{ r.path }}
+                </span>
+              </span>
+            </div>
+            <div
+              v-else-if="autoDetectCCSwitchStatus && ccSwitchRequestsState === 'ready'"
+              class="category-item status-item"
+            >
+              <span class="status-label">{{ t('configSelector.ccswitchRequestPaths') }}</span>
+              <span class="status-values">
+                <span class="status-pill">{{ t('configSelector.ccswitchNoRequests') }}</span>
+              </span>
+            </div>
+
             <div v-if="ccSwitchDetectState === 'error' && ccSwitchDetectError" class="status-error">
               {{ ccSwitchDetectError }}
             </div>
@@ -356,7 +574,17 @@ onMounted(() => {
                {{ config.type ? config.type[0].toUpperCase() : 'T' }}
             </div>
             <div class="config-info">
-                <span class="config-name">{{ config.name }}</span>
+                <span class="config-name">
+                  {{ config.name }}
+                  <span
+                    v-if="isCCSwitchImportedConfig(config)"
+                    class="ccswitch-imported-badge"
+                    :title="t('configSelector.ccswitchImportedHint')"
+                  >
+                    {{ t('configSelector.ccswitchImportedTag') }}
+                  </span>
+                  <span v-if="getCCSwitchPriorityTag(config)" class="ccswitch-priority-tag">{{ getCCSwitchPriorityTag(config) }}</span>
+                </span>
                 <span class="config-type">{{ config.type || t('configSelector.custom') }}</span>
             </div>
             <div v-if="mode === 'manage'" class="config-actions">
@@ -393,7 +621,7 @@ onMounted(() => {
     <div class="footer-actions">
       <button v-if="mode === 'manage'" @click="addTemplate" class="btn-primary full-width">{{ t('configSelector.createNewTemplate') }}</button>
       <button v-if="mode === 'edit'" @click="showEditor = true" class="btn-primary full-width">{{ t('configSelector.editCurrentTab') }}</button>
-      <button v-if="mode === 'create'" @click="createTerminal" :disabled="!selectedConfig" class="btn-primary full-width">{{ t('configSelector.createTerminal') }}</button>
+      <button v-if="mode === 'create'" @click="createTerminal" :disabled="!(selectedConfig || autoPickCandidate)" class="btn-primary full-width">{{ t('configSelector.createTerminal') }}</button>
     </div>
 
     <Transition name="fade">
@@ -409,6 +637,23 @@ onMounted(() => {
             </button>
             <button class="btn-danger" type="button" @click="confirmDeleteTemplate">
               {{ t('configSelector.delete') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="fade">
+      <div v-if="showImportConfirm" class="confirm-overlay" @click.self="cancelImportFromCCSwitch">
+        <div class="confirm-modal" @click.stop>
+          <div class="confirm-title">{{ t('configSelector.importFromCCSwitch') }}</div>
+          <div class="confirm-message">{{ t('configSelector.importFromCCSwitchConfirm') }}</div>
+          <div class="confirm-actions">
+            <button class="btn-secondary" type="button" @click="cancelImportFromCCSwitch">
+              {{ t('common.cancel') }}
+            </button>
+            <button class="btn-danger" type="button" @click="confirmImportFromCCSwitch">
+              {{ t('configSelector.importFromCCSwitch') }}
             </button>
           </div>
         </div>
@@ -515,6 +760,55 @@ h3 {
 
 .status-item {
   align-items: flex-start;
+}
+
+.status-values--stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.status-values--stack .status-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill--mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.ccswitch-priority-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(56, 189, 248, 0.18);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+
+.ccswitch-imported-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(250, 204, 21, 0.14);
+  border: 1px solid rgba(250, 204, 21, 0.26);
 }
 
 .status-label {
@@ -895,6 +1189,7 @@ input:focus {
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.4;
+  white-space: pre-line;
 }
 
 .confirm-actions {

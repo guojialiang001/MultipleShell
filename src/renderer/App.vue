@@ -153,6 +153,14 @@ const applySessionsToTabs = (sessions) => {
 }
 
 const createTab = async (config, workingDir) => {
+  // Creating a terminal should always return the user to the Shell view.
+  // This also avoids accidental mode switches (e.g. Remote) during fast modal close.
+  uiMode.value = 'shell'
+  monitorDockOpen.value = false
+  try {
+    localStorage.setItem(UI_MODE_STORAGE_KEY, 'shell')
+  } catch (_) {}
+
   const plainConfig = (() => {
     try { return structuredClone(config) } catch (_) { return JSON.parse(JSON.stringify(config)) }
   })()
@@ -631,24 +639,26 @@ const toggleVoiceCapture = () => {
     />
 
     <div class="content">
-      <Transition name="fade">
-        <div v-if="showConfigSelector" class="modal-overlay">
-          <div class="modal-container">
-            <ConfigSelector
-              :mode="configSelectorMode"
-              :configTemplates="configTemplates"
-              :currentTabConfig="activeTabId ? tabs.find(t => t.id === activeTabId)?.config : null"
-              @create="createTab"
-              @update="updateTabConfig"
-              @saveTemplate="saveConfigTemplate"
-              @deleteTemplate="deleteConfigTemplate"
-              @importFromCCSwitch="importFromCCSwitch"
-              @close="closeConfigSelector"
-              @switchMode="switchConfigMode"
-            />
+      <teleport to="body">
+        <Transition name="fade">
+          <div v-if="showConfigSelector" class="modal-overlay">
+            <div class="modal-container">
+              <ConfigSelector
+                :mode="configSelectorMode"
+                :configTemplates="configTemplates"
+                :currentTabConfig="activeTabId ? tabs.find(t => t.id === activeTabId)?.config : null"
+                @create="createTab"
+                @update="updateTabConfig"
+                @saveTemplate="saveConfigTemplate"
+                @deleteTemplate="deleteConfigTemplate"
+                @importFromCCSwitch="importFromCCSwitch"
+                @close="closeConfigSelector"
+                @switchMode="switchConfigMode"
+              />
+            </div>
           </div>
-        </div>
-      </Transition>
+        </Transition>
+      </teleport>
 
       <div
         class="shell-view"
@@ -902,19 +912,17 @@ html {
 
 /* Modal Overlay */
 .modal-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
   background-color: rgba(0, 0, 0, 0.7); /* Darker overlay */
   backdrop-filter: blur(12px);
-  z-index: 1000;
+  z-index: 2500;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  border-radius: var(--radius-lg); /* Clip to app radius */
 }
 
 .modal-container {
