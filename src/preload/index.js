@@ -3,8 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('electronAPI', {
   getConfigs: () => ipcRenderer.invoke('get-configs'),
   ccSwitchListProviders: () => ipcRenderer.invoke('ccswitch:listProviders'),
+  ccSwitchDetect: () => ipcRenderer.invoke('ccswitch:detect'),
   ccSwitchImportProviders: () => ipcRenderer.invoke('ccswitch:importProviders'),
   ccSwitchTailRequestPaths: (payload) => ipcRenderer.invoke('ccswitch:tailRequestPaths', payload),
+  claudeJsonLinkCheck: () => ipcRenderer.invoke('claude:checkClaudeJsonLink'),
   saveConfig: (config) => ipcRenderer.invoke('save-config', config),
   deleteConfig: (configId) => ipcRenderer.invoke('delete-config', configId),
   createTerminal: (config, workingDir) => ipcRenderer.invoke('create-terminal', config, workingDir),

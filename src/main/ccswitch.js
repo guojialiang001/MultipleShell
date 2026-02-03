@@ -93,6 +93,22 @@ const resolveConfigDir = () => {
 const resolveDbPath = (configDir) => path.join(configDir, 'cc-switch.db')
 const resolveLogPath = (configDir) => path.join(configDir, 'logs', 'cc-switch.log')
 
+function detect() {
+  const { configDir, source, storePath } = resolveConfigDir()
+  const dbPath = resolveDbPath(configDir)
+  const configDirExists = fs.existsSync(configDir)
+  const dbExists = fs.existsSync(dbPath)
+
+  return {
+    exists: Boolean(configDirExists && dbExists),
+    reason: !configDirExists ? 'CONFIG_DIR_NOT_FOUND' : !dbExists ? 'DB_NOT_FOUND' : null,
+    configDir,
+    dbPath,
+    source,
+    storePath: storePath || null
+  }
+}
+
 const safeJsonParse = (value, fallback) => {
   try {
     if (value == null) return fallback
@@ -513,6 +529,7 @@ async function importProviders(configManager, options = {}) {
 }
 
 module.exports = {
+  detect,
   listProviders,
   importProviders,
   toMultipleShellConfigs,

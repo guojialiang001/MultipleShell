@@ -517,6 +517,62 @@ ipcMain.handle('ccswitch:listProviders', async () => {
   return ccSwitch.listProviders()
 })
 
+ipcMain.handle('ccswitch:detect', async () => {
+  if (agent && agent.role === 'client') {
+    try {
+      await agent.call('ccswitch.providers.list', {})
+      return { exists: true }
+    } catch (err) {
+      return { exists: false, reason: 'REMOTE_ERROR', message: err?.message ? String(err.message) : String(err || '') }
+    }
+  }
+  return ccSwitch.detect()
+})
+
+ipcMain.handle('claude:checkClaudeJsonLink', async () => {
+  const result = { supported: false, method: null, error: null }
+  const tmpRoot = os.tmpdir()
+  let dir = ''
+  try {
+    dir = fs.mkdtempSync(path.join(tmpRoot, 'mps-claude-link-'))
+    const target = path.join(dir, 'target.txt')
+    fs.writeFileSync(target, 'ok\n', 'utf8')
+
+    // Prefer hardlink (no admin required). If it fails, try symlink.
+    try {
+      const hard = path.join(dir, 'hard.txt')
+      fs.linkSync(target, hard)
+      result.supported = true
+      result.method = 'hardlink'
+      return result
+    } catch (_) {}
+
+    try {
+      const sym = path.join(dir, 'sym.txt')
+      fs.symlinkSync(target, sym, 'file')
+      result.supported = true
+      result.method = 'symlink'
+      return result
+    } catch (err) {
+      result.supported = false
+      result.method = null
+      result.error = err?.message ? String(err.message) : String(err || 'unknown error')
+      return result
+    }
+  } catch (err) {
+    result.supported = false
+    result.method = null
+    result.error = err?.message ? String(err.message) : String(err || 'unknown error')
+    return result
+  } finally {
+    if (dir) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true })
+      } catch (_) {}
+    }
+  }
+})
+
 ipcMain.handle('ccswitch:importProviders', async () => {
   if (agent && agent.role === 'client') return agent.call('ccswitch.providers.import', {})
   return ccSwitch.importProviders(configManager)

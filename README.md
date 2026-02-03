@@ -101,6 +101,10 @@ node .\\scripts\\monitor-stresscheck.js
 - 用途：复用 CC Switch 的 providers/代理/故障转移配置，在 MultipleShell 中一键导入并创建会话。
 - 配置目录：默认 `~/.cc-switch`；Windows 会尝试从 `%APPDATA%\\com.ccswitch.desktop\\app_paths.json` 自动探测；可用 `MPS_CC_SWITCH_CONFIG_DIR`（或 `CC_SWITCH_CONFIG_DIR`）覆盖。
 - 一键导入：在“管理配置”里点击“从 CC Switch 覆盖导入”，会同步（含删除）所有以 `ccswitch-` 开头的模板，不影响你手动创建的模板。
+- 默认开关（创建会话面板）：
+  - “只使用 CC Switch 配置”：默认关闭（显示全部模板）。
+  - “自动检测”：默认关闭（不会后台轮询）；可手动开启或点击“刷新”。
+- 未安装/未初始化 CC Switch：如果解析到的配置目录下不存在 `cc-switch.db`，不会报错中断，只会在 UI 中提示“未检测到 CC Switch”。
 - 运行方式：
   - “使用 CC Switch”：在创建会话时将 CC Switch 的 provider 配置合并到当前模板；`CC Switch Provider ID` 留空表示跟随 CC Switch 当前 provider。
   - “走 CC Switch 代理”：将请求指向 CC Switch proxy（配合 CC Switch 的 auto-failover；需在 CC Switch 中启用 proxy）；OpenCode 使用 CC Switch 的 Codex proxy 配置。
@@ -197,6 +201,10 @@ node .\\scripts\\monitor-stresscheck.js
 
 - 你编辑的是一份 `settings.json` 的内容（JSON 文本）。
 - 启动会话时主进程会将其写入：`<userData>/claude-homes/<configId>/settings.json`，并设置环境变量 `CLAUDE_CONFIG_DIR` 指向该目录。
+- Windows：会话会统一使用 `C:\\Users\\<username>\\.claude.json` 作为 Claude Code 的主目录配置；若不存在会自动创建 `{}`（不会复制/使用 `.claude.json.backup`）。
+- 可选：“软引导 .claude.json（Claude Code）”开关（“管理配置”里，Claude Code 分类下，位于“可用配置”列表上方）：
+  - 开启后会优先尝试 hardlink/symlink，把 `C:\\Users\\<username>\\.claude.json` 链接到 `CLAUDE_CONFIG_DIR` 下（失败则回退为复制）。
+  - 目的：让 profile 目录内的 `.claude.json` 与主目录保持一致，避免不同 profile 配置漂移。
 
 示例（项目内默认模板方向）：
 

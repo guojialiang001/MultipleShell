@@ -110,6 +110,127 @@ const extractOpenCodeProviderFragment = (settingsConfig, providerId) => {
   return configObj
 }
 
+const resolveWindowsUserHomeOnC = () => {
+  const normalize = (p) => String(p || '').trim().replace(/[\\/]+$/, '')
+  const isGood = (p) => {
+    const v = normalize(p)
+    if (!v) return false
+    if (!path.isAbsolute(v)) return false
+    try {
+      return fs.existsSync(v)
+    } catch (_) {
+      return false
+    }
+  }
+
+  const fromEnv = normalize(process.env.USERPROFILE || process.env.HOME || '')
+  if (fromEnv.toLowerCase().startsWith('c:\\') && isGood(fromEnv)) return fromEnv
+
+  const fromApp = (() => {
+    try {
+      return normalize(app.getPath('home'))
+    } catch (_) {
+      return ''
+    }
+  })()
+  if (fromApp.toLowerCase().startsWith('c:\\') && isGood(fromApp)) return fromApp
+
+  const fromOs = normalize(os.homedir())
+  if (fromOs.toLowerCase().startsWith('c:\\') && isGood(fromOs)) return fromOs
+
+  const username = String(process.env.USERNAME || '').trim()
+  if (username) {
+    const guess = `C:\\Users\\${username}`
+    if (isGood(guess)) return guess
+  }
+
+  if (isGood(fromEnv)) return fromEnv
+  if (isGood(fromApp)) return fromApp
+  if (isGood(fromOs)) return fromOs
+  return normalize(fromEnv || fromApp || fromOs || 'C:\\')
+}
+
+const ensureWindowsClaudeJson = (homeOnC) => {
+  const home = String(homeOnC || '').trim()
+  if (!home) return null
+
+  const target = path.join(home, '.claude.json')
+  try {
+    if (fs.existsSync(target)) return target
+  } catch (_) {
+    // continue
+  }
+
+  const candidates = []
+  const pushHome = (p) => {
+    const v = String(p || '').trim()
+    if (!v) return
+    if (v.toLowerCase() === home.toLowerCase()) return
+    candidates.push(v)
+  }
+
+  // Try to migrate an existing .claude.json from other home paths (e.g. legacy D:\Users\...).
+  pushHome(process.env.USERPROFILE)
+  pushHome(process.env.HOME)
+  try {
+    pushHome(app.getPath('home'))
+  } catch (_) {}
+  try {
+    pushHome(os.homedir())
+  } catch (_) {}
+
+  for (const h of candidates) {
+    const src = path.join(h, '.claude.json')
+    try {
+      if (!fs.existsSync(src)) continue
+      fs.copyFileSync(src, target)
+      return target
+    } catch (_) {
+      // continue
+    }
+  }
+
+  try {
+    fs.writeFileSync(target, '{}\n', 'utf8')
+    return target
+  } catch (_) {
+    return null
+  }
+}
+
+const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC, preferLink) => {
+  const homeOnC = String(windowsHomeOnC || '').trim()
+  if (!homeOnC) return { mode: 'none' }
+
+  const globalPath = ensureWindowsClaudeJson(homeOnC)
+  if (!globalPath) return { mode: 'none' }
+
+  const target = path.join(String(profileHome || ''), '.claude.json')
+  try {
+    fs.rmSync(target, { force: true })
+  } catch (_) {}
+
+  if (preferLink) {
+    // Prefer hardlink (no admin required) and fall back to symlink where possible.
+    try {
+      fs.linkSync(globalPath, target)
+      return { mode: 'hardlink' }
+    } catch (_) {}
+
+    try {
+      fs.symlinkSync(globalPath, target, 'file')
+      return { mode: 'symlink' }
+    } catch (_) {}
+  }
+
+  try {
+    fs.copyFileSync(globalPath, target)
+    return { mode: 'copy' }
+  } catch (_) {
+    return { mode: 'none' }
+  }
+}
+
 class PTYManager {
   constructor() {
     this.sessions = new Map()
@@ -239,6 +360,12 @@ class PTYManager {
     try {
       fs.mkdirSync(profileHome, { recursive: true })
       fs.writeFileSync(path.join(profileHome, 'settings.json'), payload, 'utf8')
+
+      // Keep Claude Code sessions pinned to C:\Users\<name>\.claude.json on Windows.
+      // Optionally link (hardlink/symlink) it into each CLAUDE_CONFIG_DIR profile; otherwise copy it.
+      const preferLink = Boolean(config?.mpsClaudeJsonLink)
+      const windowsHome = process.platform === 'win32' ? resolveWindowsUserHomeOnC() : ''
+      if (windowsHome) installClaudeJsonIntoProfile(profileHome, windowsHome, preferLink)
       return profileHome
     } catch (_) {
       return null
@@ -521,6 +648,20 @@ class PTYManager {
     const claudeProfileHome = this.syncClaudeProfileFiles(effectiveConfig)
     if (claudeProfileHome) {
       env.CLAUDE_CONFIG_DIR = claudeProfileHome
+    }
+
+    // Claude Code uses the Windows user home for ~/.claude.json. Always pin it to the C: user
+    // profile so CCSWITCH/non-CCSWITCH sessions share the same global config.
+    if (isClaudeCode && process.platform === 'win32') {
+      const homeOnC = resolveWindowsUserHomeOnC()
+      if (homeOnC) {
+        env.USERPROFILE = homeOnC
+        env.HOME = homeOnC
+        const drive = homeOnC.slice(0, 2)
+        const rest = homeOnC.slice(2).replace(/\//g, '\\')
+        if (/^[A-Za-z]:$/.test(drive)) env.HOMEDRIVE = drive
+        if (rest.startsWith('\\')) env.HOMEPATH = rest
+      }
     }
 
     const opencodeConfigPath = this.syncOpenCodeProfileFiles(effectiveConfig)

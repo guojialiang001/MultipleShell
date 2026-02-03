@@ -33,6 +33,7 @@ const TYPE_ORDER = ['claude-code', 'codex', 'opencode']
 const ONLY_CCSWITCH_CONFIGS_KEY = 'mps.selectTemplate.onlyCCSwitchConfigs'
 const LEGACY_ONLY_CCSWITCH_CONFIGS_KEY = 'mps.manageTemplates.onlyCCSwitchConfigs'
 const CCSWITCH_AUTODETECT_KEY = 'mps.selectTemplate.ccswitchAutoDetect'
+const CLAUDE_JSON_LINK_KEY = 'mps.selectTemplate.claudeJsonLink'
 
 const readBool = (key, fallback = false) => {
   try {
@@ -51,10 +52,15 @@ const writeBool = (key, value) => {
   } catch (_) {}
 }
 
-const onlyCCSwitchConfigs = ref(readBool(ONLY_CCSWITCH_CONFIGS_KEY, readBool(LEGACY_ONLY_CCSWITCH_CONFIGS_KEY, true)))
-const autoDetectCCSwitchStatus = ref(readBool(CCSWITCH_AUTODETECT_KEY, true))
+// Defaults:
+// - Only CC Switch configs: OFF (show all templates)
+// - Auto-detect (CC Switch): OFF (no background detection)
+const onlyCCSwitchConfigs = ref(
+  readBool(ONLY_CCSWITCH_CONFIGS_KEY, readBool(LEGACY_ONLY_CCSWITCH_CONFIGS_KEY, false))
+)
+const autoDetectCCSwitchStatus = ref(readBool(CCSWITCH_AUTODETECT_KEY, false))
 
-const ccSwitchDetectState = ref('idle') // idle | loading | ready | error
+const ccSwitchDetectState = ref('idle') // idle | loading | ready | missing | error
 const ccSwitchProxyEnabled = ref(null) // boolean | null
 const ccSwitchFailoverEnabled = ref(null) // boolean | null
 const ccSwitchFailoverPriorityById = ref({}) // { [providerId]: number }
@@ -62,6 +68,11 @@ const ccSwitchProxyAddress = ref('') // string
 const ccSwitchRequestLogPath = ref('') // string
 const ccSwitchRecentRequests = ref([]) // Array<{ appType: string, path: string, raw: string }>
 const ccSwitchDetectError = ref('')
+const ccSwitchDetectHint = ref('')
+
+const claudeJsonLinkEnabled = ref(readBool(CLAUDE_JSON_LINK_KEY, false))
+const claudeJsonLinkSupported = ref(null) // boolean | null
+const claudeJsonLinkMessage = ref('')
 
 const resolveProxyAppKeyForType = (type) => {
   const t = normalizeType(type)
@@ -81,6 +92,36 @@ const resetCCSwitchStatus = () => {
   ccSwitchRequestLogPath.value = ''
   ccSwitchRecentRequests.value = []
   ccSwitchDetectError.value = ''
+  ccSwitchDetectHint.value = ''
+}
+
+const refreshClaudeJsonLinkSupport = async () => {
+  if (props.mode !== 'create' && props.mode !== 'manage') return
+  if (normalizeType(activeType.value) !== 'claude-code') return
+  if (!claudeJsonLinkEnabled.value) return
+
+  const api = window?.electronAPI
+  if (!api?.claudeJsonLinkCheck) {
+    claudeJsonLinkSupported.value = false
+    claudeJsonLinkMessage.value = 'Missing electronAPI.claudeJsonLinkCheck'
+    return
+  }
+
+  try {
+    const res = await api.claudeJsonLinkCheck()
+    const supported = Boolean(res?.supported)
+    claudeJsonLinkSupported.value = supported
+    if (supported) {
+      claudeJsonLinkMessage.value = t('configSelector.claudeJsonLinkSupported', { method: String(res?.method || '') })
+    } else {
+      claudeJsonLinkMessage.value = t('configSelector.claudeJsonLinkUnsupported', { error: String(res?.error || '') })
+    }
+  } catch (err) {
+    claudeJsonLinkSupported.value = false
+    claudeJsonLinkMessage.value = t('configSelector.claudeJsonLinkUnsupported', {
+      error: err?.message ? String(err.message) : String(err || '')
+    })
+  }
 }
 
 const normalizeProxyHost = (host) => {
@@ -121,8 +162,21 @@ const refreshCCSwitchStatus = async () => {
 
   ccSwitchDetectState.value = 'loading'
   ccSwitchDetectError.value = ''
+  ccSwitchDetectHint.value = ''
 
   try {
+    if (api?.ccSwitchDetect) {
+      const detect = await api.ccSwitchDetect()
+      if (!detect?.exists) {
+        resetCCSwitchStatus()
+        ccSwitchDetectState.value = 'missing'
+        ccSwitchDetectHint.value = t('configSelector.ccswitchMissingHint', {
+          path: String(detect?.dbPath || detect?.configDir || '').trim()
+        })
+        return
+      }
+    }
+
     const snapshot = await api.ccSwitchListProviders()
     const proxyAppKey = resolveProxyAppKeyForType(activeType.value)
     const proxyCfg = proxyAppKey ? snapshot?.proxy?.[proxyAppKey] : null
@@ -138,12 +192,21 @@ const refreshCCSwitchStatus = async () => {
 
     ccSwitchDetectState.value = 'ready'
   } catch (err) {
+    const message = err?.message ? String(err.message) : String(err || 'Unknown error')
+    const missingMatch = message.match(/CC Switch database not found:\s*(.+)$/i)
+    if (missingMatch) {
+      resetCCSwitchStatus()
+      ccSwitchDetectState.value = 'missing'
+      ccSwitchDetectHint.value = t('configSelector.ccswitchMissingHint', { path: String(missingMatch[1] || '').trim() })
+      return
+    }
+
     ccSwitchDetectState.value = 'error'
     ccSwitchProxyEnabled.value = null
     ccSwitchFailoverEnabled.value = null
     ccSwitchFailoverPriorityById.value = {}
     ccSwitchProxyAddress.value = ''
-    ccSwitchDetectError.value = err?.message ? String(err.message) : String(err || 'Unknown error')
+    ccSwitchDetectError.value = message
   }
 }
 
@@ -280,6 +343,13 @@ watch(autoDetectCCSwitchStatus, async (v) => {
   await refreshCCSwitchStatus()
 })
 
+watch(claudeJsonLinkEnabled, async (v) => {
+  writeBool(CLAUDE_JSON_LINK_KEY, Boolean(v))
+  claudeJsonLinkSupported.value = null
+  claudeJsonLinkMessage.value = ''
+  if (v) await refreshClaudeJsonLinkSupport()
+})
+
 watch(
   [() => props.configTemplates, () => props.mode, onlyCCSwitchConfigs],
   ([templates]) => {
@@ -303,6 +373,7 @@ watch(
 watch(activeType, () => {
   selectedConfig.value = null
   refreshCCSwitchStatus()
+  refreshClaudeJsonLinkSupport()
 })
 
 watch(
@@ -349,7 +420,11 @@ const toPlain = (obj) => {
 const createTerminal = () => {
   const cfg = selectedConfig.value || autoPickCandidate.value
   if (!cfg) return
-  emit('create', toPlain(cfg), customWorkingDir.value)
+  const payload = toPlain(cfg)
+  if (normalizeType(payload?.type) === 'claude-code') {
+    payload.mpsClaudeJsonLink = Boolean(claudeJsonLinkEnabled.value)
+  }
+  emit('create', payload, customWorkingDir.value)
 }
 
 const saveConfig = async (config) => {
@@ -358,7 +433,11 @@ const saveConfig = async (config) => {
   } else if (props.mode === 'manage') {
     await emit('saveTemplate', config)
   } else {
-    emit('create', toPlain(config), customWorkingDir.value)
+    const payload = toPlain(config)
+    if (normalizeType(payload?.type) === 'claude-code') {
+      payload.mpsClaudeJsonLink = Boolean(claudeJsonLinkEnabled.value)
+    }
+    emit('create', payload, customWorkingDir.value)
   }
   showEditor.value = false
 }
@@ -421,6 +500,7 @@ const headerTitle = computed(() => {
 
 const ccSwitchStatusText = (value) => {
   if (ccSwitchDetectState.value === 'loading') return t('configSelector.ccswitchDetecting')
+  if (ccSwitchDetectState.value === 'missing') return t('configSelector.ccswitchMissingStatus')
   if (value === true) return t('configSelector.ccswitchEnabled')
   if (value === false) return t('configSelector.ccswitchDisabled')
   return t('configSelector.ccswitchUnknown')
@@ -454,6 +534,7 @@ watch(
 onMounted(() => {
   refreshCCSwitchStatus()
   refreshCCSwitchRecentRequests()
+  refreshClaudeJsonLinkSupport()
 })
 
 onBeforeUnmount(() => {
@@ -555,8 +636,36 @@ onBeforeUnmount(() => {
               </span>
             </div>
 
+            <div v-if="ccSwitchDetectState === 'missing' && ccSwitchDetectHint" class="status-hint">
+              {{ ccSwitchDetectHint }}
+            </div>
+
             <div v-if="ccSwitchDetectState === 'error' && ccSwitchDetectError" class="status-error">
               {{ ccSwitchDetectError }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="mode === 'manage' && activeType === 'claude-code'" class="category-panel">
+          <div class="category-box">
+            <div class="category-item">
+              <label class="slide-toggle" @click.stop>
+                <input v-model="claudeJsonLinkEnabled" type="checkbox" @click.stop />
+                <span class="slide-toggle-slider" aria-hidden="true"></span>
+                <span class="slide-toggle-text">{{ t('configSelector.claudeJsonLink') }}</span>
+              </label>
+              <button
+                class="btn-ghost-small"
+                type="button"
+                :disabled="!claudeJsonLinkEnabled"
+                @click.stop="refreshClaudeJsonLinkSupport"
+              >
+                {{ t('configSelector.check') }}
+              </button>
+            </div>
+
+            <div v-if="claudeJsonLinkEnabled && claudeJsonLinkMessage" class="status-hint">
+              {{ claudeJsonLinkMessage }}
             </div>
           </div>
         </div>
@@ -851,6 +960,13 @@ h3 {
 .status-error {
   font-size: 12px;
   color: rgba(239, 68, 68, 0.95);
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.status-hint {
+  font-size: 12px;
+  color: rgba(251, 191, 36, 0.95);
   border-top: 1px dashed rgba(255, 255, 255, 0.08);
   padding-top: 10px;
 }

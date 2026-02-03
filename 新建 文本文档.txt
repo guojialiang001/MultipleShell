@@ -1,0 +1,1 @@
+claude code  无论是CCSWITCH 还是非CCSWITCH， .claude.json都取主目录中的文件配置
