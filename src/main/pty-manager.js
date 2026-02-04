@@ -242,95 +242,6 @@ const ensureWindowsClaudeJson = (homeOnC) => {
   }
 }
 
-const ensureWindowsClaudeDotDir = (homeOnC) => {
-  const home = String(homeOnC || '').trim()
-  if (!home) return null
-
-  const target = path.join(home, '.claude')
-
-  const isNonEmptyDir = (p) => {
-    try {
-      const st = fs.statSync(p)
-      if (!st.isDirectory()) return false
-      const entries = fs.readdirSync(p)
-      return entries.length > 0
-    } catch (_) {
-      return false
-    }
-  }
-
-  const isEmptyDir = (p) => {
-    try {
-      const st = fs.statSync(p)
-      if (!st.isDirectory()) return false
-      const entries = fs.readdirSync(p)
-      return entries.length === 0
-    } catch (_) {
-      return false
-    }
-  }
-
-  try {
-    if (isNonEmptyDir(target)) return target
-  } catch (_) {}
-
-  const candidates = []
-  const pushHome = (p) => {
-    const v = String(p || '').trim()
-    if (!v) return
-    if (v.toLowerCase() === home.toLowerCase()) return
-    candidates.push(v)
-  }
-
-  pushHome(process.env.USERPROFILE)
-  pushHome(process.env.HOME)
-  try {
-    pushHome(app.getPath('home'))
-  } catch (_) {}
-  try {
-    pushHome(os.homedir())
-  } catch (_) {}
-
-  // If the target doesn't exist (or is empty), try to preserve existing sessions by junctioning
-  // to a legacy "~/.claude" directory (e.g. D:\Users\...\.claude).
-  const shouldReplace = (() => {
-    try {
-      if (!fs.existsSync(target)) return true
-      const lst = fs.lstatSync(target)
-      if (lst.isSymbolicLink()) return false
-      if (lst.isDirectory()) return isEmptyDir(target)
-      return false
-    } catch (_) {
-      return false
-    }
-  })()
-
-  if (shouldReplace) {
-    for (const h of candidates) {
-      const src = path.join(h, '.claude')
-      if (!isNonEmptyDir(src)) continue
-      try {
-        if (fs.existsSync(target)) {
-          fs.rmSync(target, { recursive: true, force: true })
-        }
-      } catch (_) {}
-      try {
-        fs.symlinkSync(src, target, 'junction')
-        return target
-      } catch (_) {
-        // continue
-      }
-    }
-  }
-
-  try {
-    fs.mkdirSync(target, { recursive: true })
-    return target
-  } catch (_) {
-    return null
-  }
-}
-
 const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC) => {
   const homeOnC = String(windowsHomeOnC || '').trim()
   if (!homeOnC) return { mode: 'none' }
@@ -339,6 +250,20 @@ const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC) => {
   if (!globalPath) return { mode: 'none' }
 
   const target = path.join(String(profileHome || ''), '.claude.json')
+  const sanitizeExistingTarget = () => {
+    try {
+      if (!fs.existsSync(target)) return { ok: false }
+      const raw = fs.readFileSync(target, 'utf8')
+      const doc = parseJsonObject(raw)
+      if (!doc) return { ok: false }
+      deleteKeyDeep(doc, 'lastSessionId')
+      deleteKeyDeep(doc, 'projects')
+      fs.writeFileSync(target, JSON.stringify(doc, null, 2) + '\n', 'utf8')
+      return { ok: true }
+    } catch (_) {
+      return { ok: false }
+    }
+  }
 
   // If a previous version created a hardlink/symlink to the global .claude.json,
   // break that link to avoid config bleed across templates.
@@ -355,13 +280,16 @@ const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC) => {
             if (stTarget.dev === stGlobal.dev && stTarget.ino && stTarget.ino === stGlobal.ino) {
               fs.rmSync(target, { force: true })
             } else {
+              sanitizeExistingTarget()
               return { mode: 'existing' }
             }
           } catch (_) {
+            sanitizeExistingTarget()
             return { mode: 'existing' }
           }
         }
       } catch (_) {
+        sanitizeExistingTarget()
         return { mode: 'existing' }
       }
     }
@@ -387,61 +315,6 @@ const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC) => {
   } catch (_) {
     return { mode: 'none' }
   }
-}
-
-const installClaudeDotDirIntoProfile = (profileHome, windowsHomeOnC) => {
-  const homeOnC = String(windowsHomeOnC || '').trim()
-  if (!homeOnC) return { mode: 'none' }
-
-  const profileRoot = String(profileHome || '').trim()
-  if (!profileRoot) return { mode: 'none' }
-
-  const globalDir = ensureWindowsClaudeDotDir(homeOnC)
-  if (!globalDir) return { mode: 'none' }
-  const target = path.join(profileRoot, '.claude')
-
-  const ensureDir = (p) => {
-    try {
-      fs.mkdirSync(p, { recursive: true })
-      return true
-    } catch (_) {
-      return false
-    }
-  }
-
-  const tryJunction = () => {
-    try {
-      // Junction doesn't require admin privileges (unlike directory symlink on some setups).
-      fs.symlinkSync(globalDir, target, 'junction')
-      return true
-    } catch (_) {
-      return false
-    }
-  }
-
-  // If profile already has a non-empty ".claude" dir, keep it as-is.
-  // If it's an empty directory, replace it with a junction to the global home to preserve sessions.
-  try {
-    if (fs.existsSync(target)) {
-      const lst = fs.lstatSync(target)
-      if (lst.isSymbolicLink()) return { mode: 'existing' }
-      if (!lst.isDirectory()) return { mode: 'existing' }
-      const entries = fs.readdirSync(target)
-      if (entries.length > 0) return { mode: 'existing' }
-      try {
-        fs.rmSync(target, { recursive: true, force: true })
-      } catch (_) {
-        return { mode: 'existing' }
-      }
-    }
-  } catch (_) {
-    return { mode: 'none' }
-  }
-
-  // globalDir is ensured by ensureWindowsClaudeDotDir(); keep this check as extra safety.
-  if (!ensureDir(globalDir)) return { mode: 'none' }
-  if (tryJunction()) return { mode: 'junction' }
-  return { mode: 'none' }
 }
 
 class PTYManager {
@@ -580,9 +453,6 @@ class PTYManager {
       const windowsHome = process.platform === 'win32' ? resolveWindowsUserHomeOnC() : ''
       if (windowsHome) {
         installClaudeJsonIntoProfile(profileHome, windowsHome)
-        // Claude Code stores most conversation/project state under "~/.claude/" (not in ".claude.json").
-        // Link it into the profile home so copying ".claude.json" doesn't lose existing sessions.
-        installClaudeDotDirIntoProfile(profileHome, windowsHome)
       }
       return profileHome
     } catch (_) {
