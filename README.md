@@ -38,6 +38,7 @@ A multi-tab terminal manager for local development/debugging. Start different ki
   - Extra fallback handling for `clear/cls` (front-end detection + forced clear).
 - Secure storage (important): configs and drafts are encrypted with Electron `safeStorage` and stored in the user directory; the app warns and exits if secure storage is unavailable.
 - Codex extra isolation: each session uses a dedicated temporary `CODEX_HOME` to avoid Codex mutating your template source files.
+- Claude Code session isolation: per-template `CLAUDE_CONFIG_DIR` + HOME/USERPROFILE; by default clears `history.jsonl` under the template profile to avoid resuming old sessions (set `MPS_CLAUDE_PRESERVE_HISTORY=1` to keep it).
 - Windows install/uninstall UX: NSIS installer includes custom "app is running" checks to avoid uninstall/upgrade failures across different privileges/users.
 
 ## Tech Stack
@@ -285,6 +286,7 @@ Default template:
 - `MPS_KEEP_CODEX_HOME=1`: keep each session's temp `CODEX_HOME` dir.
 - `MPS_DEBUG_ENV_APPLY=1`: debug env injection (prints hints in the terminal).
 - `MPS_SUPPRESS_DIALOGS=1`: suppress main-process dialogs (used by self-check scripts).
+- `MPS_CLAUDE_PRESERVE_HISTORY=1`: keep Claude Code `history.jsonl` in the template profile (default: cleared to avoid resuming old sessions).
 
 ## FAQ
 

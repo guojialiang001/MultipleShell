@@ -38,6 +38,7 @@
   - `clear/cls` 等清屏行为做了额外兜底处理（前端检测 + 强制清屏）。
 - 安全存储（重要）：配置与草稿使用 Electron `safeStorage` 加密写入用户目录；系统不支持安全存储时应用会提示并退出。
 - Codex 额外隔离：每个会话使用独立临时 `CODEX_HOME`，避免 Codex 在运行时改写用户的模板源文件。
+- Claude Code 会话隔离：每个模板使用独立 `CLAUDE_CONFIG_DIR` + HOME/USERPROFILE；默认会清理模板 profile 下的 `history.jsonl`，避免自动续接旧会话（如需保留，设置 `MPS_CLAUDE_PRESERVE_HISTORY=1`）。
 - Windows 安装/卸载体验：NSIS 安装包自定义 “应用正在运行” 检测逻辑，避免不同权限/不同用户启动导致无法卸载/升级。
 
 ## 技术栈
@@ -287,6 +288,7 @@ node .\\scripts\\monitor-stresscheck.js
 - `MPS_KEEP_CODEX_HOME=1`：不清理每个会话创建的临时 `CODEX_HOME`。
 - `MPS_DEBUG_ENV_APPLY=1`：调试 env 注入行为（会在终端输出提示）。
 - `MPS_SUPPRESS_DIALOGS=1`：抑制主进程弹窗（自检脚本使用）。
+- `MPS_CLAUDE_PRESERVE_HISTORY=1`：保留 Claude Code 在模板 profile 下的 `history.jsonl`（默认会清理，避免续接旧会话）。
 
 ## 常见问题
 

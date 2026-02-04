@@ -433,32 +433,48 @@ class PTYManager {
     }
   }
 
-  syncClaudeProfileFiles(config) {
-    const type = typeof config?.type === 'string' ? config.type : ''
-    if (type !== 'claude-code') return null
-    const id = typeof config?.id === 'string' ? config.id.trim() : ''
-    if (!id) return null
+	  syncClaudeProfileFiles(config) {
+	    const type = typeof config?.type === 'string' ? config.type : ''
+	    if (type !== 'claude-code') return null
+	    const id = typeof config?.id === 'string' ? config.id.trim() : ''
+	    if (!id) return null
 
-    const settingsJson = typeof config?.claudeSettingsJson === 'string' ? config.claudeSettingsJson : ''
-    const payload = settingsJson.trim() ? settingsJson : '{}'
+	    const settingsJson = typeof config?.claudeSettingsJson === 'string' ? config.claudeSettingsJson : ''
+	    const payload = settingsJson.trim() ? settingsJson : '{}'
 
-    const profileHome = path.join(app.getPath('userData'), 'claude-homes', id)
-    try {
-      fs.mkdirSync(profileHome, { recursive: true })
-      fs.writeFileSync(path.join(profileHome, 'settings.json'), payload, 'utf8')
+	    const profileHome = path.join(app.getPath('userData'), 'claude-homes', id)
+	    try {
+	      fs.mkdirSync(profileHome, { recursive: true })
+	      fs.writeFileSync(path.join(profileHome, 'settings.json'), payload, 'utf8')
 
-      // Keep Claude Code sessions pinned to C:\Users\<name>\.claude.json on Windows.
-      // Always copy .claude.json into the per-template profile dir. We intentionally do NOT
-      // hardlink/symlink because Claude Code can write to this file and we must avoid config bleed.
-      const windowsHome = process.platform === 'win32' ? resolveWindowsUserHomeOnC() : ''
-      if (windowsHome) {
-        installClaudeJsonIntoProfile(profileHome, windowsHome)
-      }
-      return profileHome
-    } catch (_) {
-      return null
-    }
-  }
+	      // Keep Claude Code sessions pinned to C:\Users\<name>\.claude.json on Windows.
+	      // Always copy .claude.json into the per-template profile dir. We intentionally do NOT
+	      // hardlink/symlink because Claude Code can write to this file and we must avoid config bleed.
+	      const windowsHome = process.platform === 'win32' ? resolveWindowsUserHomeOnC() : ''
+	      if (windowsHome) {
+	        installClaudeJsonIntoProfile(profileHome, windowsHome)
+	      }
+
+	      // Prevent old Claude Code sessions from being resumed via persisted history.
+	      // Default: clear; opt-out by setting MPS_CLAUDE_PRESERVE_HISTORY=1.
+	      if (process.env.MPS_CLAUDE_PRESERVE_HISTORY !== '1') {
+	        const candidates = [
+	          path.join(profileHome, 'history.jsonl'),
+	          path.join(profileHome, '.claude', 'history.jsonl')
+	        ]
+	        for (const candidate of candidates) {
+	          try {
+	            fs.rmSync(candidate, { force: true })
+	          } catch (_) {
+	            // ignore
+	          }
+	        }
+	      }
+	      return profileHome
+	    } catch (_) {
+	      return null
+	    }
+	  }
 
   syncCodexProfileFiles(config) {
     const type = typeof config?.type === 'string' ? config.type : ''
@@ -735,7 +751,7 @@ class PTYManager {
 
     // Working directory is selected only when creating a new tab/session.
     // Do not persist/associate it with the template/profile itself.
-    const cwd = workingDir || process.env.USERPROFILE
+    let cwd = workingDir || process.env.USERPROFILE
 
     // Only inject environment variables into the PowerShell session (per-process).
     // Source of truth is the user config JSON's env (stored as config.envVars).
@@ -745,6 +761,15 @@ class PTYManager {
     const claudeProfileHome = this.syncClaudeProfileFiles(effectiveConfig)
     if (claudeProfileHome) {
       env.CLAUDE_CONFIG_DIR = claudeProfileHome
+    }
+
+    // Claude Code loads "Project settings" from <cwd>/.claude/settings.json.
+    // If we default to the real user home dir on Windows (which usually has ~/.claude),
+    // those project settings can override the per-template CLAUDE_CONFIG_DIR and cause
+    // cross-template config bleed (e.g. CC Switch vs non-CC Switch).
+    // Only when the user didn't explicitly pick a workingDir, default to the isolated profile dir.
+    if (isClaudeCode && !workingDir && claudeProfileHome) {
+      cwd = claudeProfileHome
     }
 
     // Claude Code uses the Windows user home for ~/.claude.json.
