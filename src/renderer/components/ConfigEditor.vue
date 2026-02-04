@@ -102,14 +102,7 @@ const getClaudeSettingsTemplate = () =>
 
 const getOpenCodeConfigTemplate = () =>
   JSON.stringify(
-    {
-      '$schema': 'https://opencode.ai/config.json',
-      permission: {
-        edit: 'ask',
-        bash: 'ask',
-        webfetch: 'allow'
-      }
-    },
+    {},
     null,
     2
   )
@@ -538,7 +531,7 @@ const save = () => {
             <textarea
               v-model="opencodeConfigJsonText"
               @input="opencodeConfigDirty = true"
-              placeholder='{\n  "$schema": "https://opencode.ai/config.json",\n  "permission": {\n    "edit": "ask",\n    "bash": "ask",\n    "webfetch": "allow"\n  }\n}'
+              placeholder='{}'
               rows="10"
               class="code-input"
             ></textarea>

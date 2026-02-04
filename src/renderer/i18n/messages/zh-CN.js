@@ -73,7 +73,7 @@ export default {
     noActiveTerminals: '没有活动终端',
     pressCtrlT: '按 {shortcut} 开始新会话',
     newTerminal: '新建终端',
-    settingsTitle: '应用',
+    settingsTitle: '关闭提示',
     closeConfirmModeLabel: '关闭确认',
     closeConfirmModeInput: '输入 CLOSE',
     closeConfirmModeDblclick: '双击关闭',
@@ -168,7 +168,7 @@ export default {
     claudeSettingsJson: 'Claude settings.json',
     codexConfigToml: 'Codex config.toml',
     codexAuthJson: 'Codex auth.json',
-    opencodeConfigJson: 'OpenCode config.json',
+    opencodeConfigJson: 'OpenCode .opencode.json',
     ccswitchImportedHint:
       '\u63d0\u793a\uff1a\u5f53\u524d\u914d\u7f6e\u6765\u81ea CC Switch \u8986\u76d6\u5bfc\u5165\uff0c\u4e0b\u6b21\u8986\u76d6\u5bfc\u5165\u65f6\u53ef\u80fd\u4f1a\u88ab\u66f4\u65b0\u6216\u5220\u9664\u3002',
     selectType: '选择类型...',

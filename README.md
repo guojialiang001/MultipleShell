@@ -237,21 +237,15 @@ Example (default template direction in this project):
 
 ### 3) OpenCode (`opencode`)
 
-- You edit an `opencode.json` file (JSON text).
-- When a session starts, the main process writes it to `<userData>/opencode-homes/<configId>/opencode.json` and sets `OPENCODE_CONFIG` to that file.
+- You edit a `.opencode.json` file (JSON text).
+- When a session starts, the main process writes it to `<userData>/opencode-homes/<configId>/opencode/.opencode.json` and sets `XDG_CONFIG_HOME=<userData>/opencode-homes/<configId>` so upstream OpenCode can pick it up.
+- If missing, MultipleShell injects `data.directory=<userData>/opencode-runtime/<configId>` to keep OpenCode session history in a per-template stable location.
 - This type also supports extra `envVars` (injected into the session environment).
 
 Default template:
 
 ```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "edit": "ask",
-    "bash": "ask",
-    "webfetch": "allow"
-  }
-}
+{}
 ```
 
 ## Data and security

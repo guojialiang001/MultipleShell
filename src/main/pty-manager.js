@@ -7,7 +7,9 @@ const path = require('path')
 const shellMonitor = require('./shell-monitor')
 const ccSwitch = require('./ccswitch')
 
-const OPENCODE_CONFIG_TEMPLATE = '{\n  "$schema": "https://opencode.ai/config.json",\n  "permission": {\n    "edit": "ask",\n    "bash": "ask",\n    "webfetch": "allow"\n  }\n}\n'
+// Upstream OpenCode reads `.opencode.json` from `$XDG_CONFIG_HOME/opencode/.opencode.json` (and other default paths).
+// Keep this template minimal; MultipleShell injects a per-template `data.directory` when materializing.
+const OPENCODE_CONFIG_TEMPLATE = '{\n  \n}\n'
 const OPENCODE_PERMISSION_TEMPLATE = { edit: 'ask', bash: 'ask', webfetch: 'allow' }
 const PROMPT_MARKER = '__MPS_PROMPT__'
 
@@ -506,12 +508,33 @@ class PTYManager {
       typeof config?.opencodeConfigJson === 'string' ? config.opencodeConfigJson : ''
     const payload = opencodeConfigJson.trim() ? opencodeConfigJson : OPENCODE_CONFIG_TEMPLATE
 
-    const profileHome = path.join(app.getPath('userData'), 'opencode-homes', id)
+    const userData = app.getPath('userData')
+    const profileHome = path.join(userData, 'opencode-homes', id)
+    const runtimeDir = path.join(userData, 'opencode-runtime', id)
+    const configDir = path.join(profileHome, 'opencode')
     try {
-      fs.mkdirSync(profileHome, { recursive: true })
-      const configPath = path.join(profileHome, 'opencode.json')
-      fs.writeFileSync(configPath, payload, 'utf8')
-      return configPath
+      fs.mkdirSync(configDir, { recursive: true })
+      fs.mkdirSync(runtimeDir, { recursive: true })
+
+      const configPath = path.join(configDir, '.opencode.json')
+      const doc = parseJsonObject(payload)
+      if (doc) {
+        const next = ensureObject(clonePlain(doc))
+        next.data = ensureObject(next.data)
+        if (typeof next.data.directory !== 'string' || !next.data.directory.trim()) {
+          next.data.directory = runtimeDir
+        }
+        fs.writeFileSync(configPath, JSON.stringify(next, null, 2) + '\n', 'utf8')
+      } else {
+        fs.writeFileSync(configPath, payload, 'utf8')
+      }
+
+      return {
+        profileHome,
+        xdgConfigHome: profileHome,
+        configPath,
+        runtimeDir
+      }
     } catch (_) {
       return null
     }
@@ -788,9 +811,11 @@ class PTYManager {
       }
     }
 
-    const opencodeConfigPath = this.syncOpenCodeProfileFiles(effectiveConfig)
-    if (opencodeConfigPath) {
-      env.OPENCODE_CONFIG = opencodeConfigPath
+    const opencodeProfile = this.syncOpenCodeProfileFiles(effectiveConfig)
+    if (opencodeProfile && opencodeProfile.xdgConfigHome) {
+      env.XDG_CONFIG_HOME = opencodeProfile.xdgConfigHome
+      env.MPS_OPENCODE_PROFILE_HOME = opencodeProfile.profileHome
+      env.MPS_OPENCODE_DATA_DIR = opencodeProfile.runtimeDir
     }
 
     // Codex: create an isolated CODEX_HOME with per-template config.toml/auth.json,

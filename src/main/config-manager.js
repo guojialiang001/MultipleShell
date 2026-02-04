@@ -45,7 +45,9 @@ class ConfigManager {
   }
 
   getOpenCodeConfigTemplate() {
-    return '{\n  "$schema": "https://opencode.ai/config.json",\n  "permission": {\n    "edit": "ask",\n    "bash": "ask",\n    "webfetch": "allow"\n  }\n}\n'
+    // Upstream OpenCode reads `.opencode.json` and merges config from `$XDG_CONFIG_HOME/opencode/.opencode.json`.
+    // Keep the default template minimal; MultipleShell will inject a per-template `data.directory` when materializing.
+    return '{\n  \n}\n'
   }
 
   getClaudeSettingsTemplate() {
@@ -130,8 +132,44 @@ class ConfigManager {
 
     fs.mkdirSync(openCodeHome, { recursive: true })
     this.setSecurePermissions(openCodeHome, true)
-    const filePath = path.join(openCodeHome, 'opencode.json')
-    fs.writeFileSync(filePath, payload, 'utf8')
+
+    const parseJsonObject = (raw) => {
+      try {
+        const text = String(raw || '').trim()
+        if (!text) return null
+        const parsed = JSON.parse(text)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+        return parsed
+      } catch (_) {
+        return null
+      }
+    }
+
+    const ensurePlainObject = (value) =>
+      value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+
+    const userData = app.getPath('userData')
+    const id = path.basename(openCodeHome)
+    const runtimeDir = path.join(userData, 'opencode-runtime', id)
+
+    const configDir = path.join(openCodeHome, 'opencode')
+    fs.mkdirSync(configDir, { recursive: true })
+    this.setSecurePermissions(configDir, true)
+
+    fs.mkdirSync(runtimeDir, { recursive: true })
+    this.setSecurePermissions(runtimeDir, true)
+
+    const filePath = path.join(configDir, '.opencode.json')
+    const doc = parseJsonObject(payload)
+    if (doc) {
+      doc.data = ensurePlainObject(doc.data)
+      if (typeof doc.data.directory !== 'string' || !doc.data.directory.trim()) {
+        doc.data.directory = runtimeDir
+      }
+      fs.writeFileSync(filePath, JSON.stringify(doc, null, 2) + '\n', 'utf8')
+    } else {
+      fs.writeFileSync(filePath, payload, 'utf8')
+    }
     this.setSecurePermissions(filePath, false)
   }
 
@@ -140,6 +178,16 @@ class ConfigManager {
     if (!openCodeHome) return
     try {
       fs.rmSync(openCodeHome, { recursive: true, force: true })
+    } catch (_) {
+      // ignore
+    }
+
+    // Clean up per-template runtime state as well.
+    try {
+      const id = typeof configId === 'string' ? configId.trim() : ''
+      if (!id) return
+      const runtimeDir = path.join(app.getPath('userData'), 'opencode-runtime', id)
+      fs.rmSync(runtimeDir, { recursive: true, force: true })
     } catch (_) {
       // ignore
     }

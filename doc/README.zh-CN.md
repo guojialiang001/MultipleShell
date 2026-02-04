@@ -239,21 +239,15 @@ node .\\scripts\\monitor-stresscheck.js
 
 ### 3) OpenCode（`opencode`）
 
-- 你编辑的是一份 `opencode.json`（JSON 文本）。
-- 启动会话时主进程会将其写入：`<userData>/opencode-homes/<configId>/opencode.json`，并设置环境变量 `OPENCODE_CONFIG` 指向该文件。
+- 你编辑的是一份 `.opencode.json`（JSON 文本）。
+- 启动会话时主进程会将其写入：`<userData>/opencode-homes/<configId>/opencode/.opencode.json`，并设置 `XDG_CONFIG_HOME=<userData>/opencode-homes/<configId>` 让上游 OpenCode 自动读取该配置。
+- 若未显式设置，MultipleShell 会注入 `data.directory=<userData>/opencode-runtime/<configId>`，把 OpenCode 会话历史落到 per-template 的稳定目录。
 - 该类型支持额外 `envVars`（会注入到会话环境变量里）。
 
 默认模板：
 
 ```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "edit": "ask",
-    "bash": "ask",
-    "webfetch": "allow"
-  }
-}
+{}
 ```
 
 ## 数据与安全
