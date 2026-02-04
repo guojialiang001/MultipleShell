@@ -363,12 +363,14 @@ watch(
   border-bottom: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
 }
 
 .tab-row {
   display: flex;
   align-items: center;
-  padding: 8px 8px 0 8px; /* Bottom is 0 because tabs sit on the bottom line */
+  padding: 8px 8px 0 8px;
   gap: 8px;
   overflow: hidden;
 }

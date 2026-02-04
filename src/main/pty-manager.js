@@ -19,6 +19,22 @@ const clonePlain = (value) => {
   }
 }
 
+const isImportedFromCCSwitch = (cfg) => {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false
+  if (cfg.importSource === 'ccswitch') return true
+
+  // Back-compat: stable prefix + provider id indicates an imported CC Switch template.
+  const id = typeof cfg.id === 'string' ? cfg.id : ''
+  const providerId = typeof cfg.ccSwitchProviderId === 'string' ? cfg.ccSwitchProviderId.trim() : ''
+  if (id.startsWith('ccswitch-') && providerId) return true
+
+  // Extra heuristic: some older exports may keep the "CC Switch - ..." name.
+  const name = typeof cfg.name === 'string' ? cfg.name : ''
+  if (name.startsWith('CC Switch - ') && providerId) return true
+
+  return false
+}
+
 const parseJsonObject = (raw) => {
   try {
     if (raw == null) return null
@@ -35,6 +51,34 @@ const parseJsonObject = (raw) => {
 const ensureObject = (value) => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value
   return {}
+}
+
+const deleteKeyDeep = (value, key) => {
+  const targetKey = String(key || '')
+  if (!targetKey) return
+
+  const stack = [value]
+  while (stack.length > 0) {
+    const cur = stack.pop()
+    if (!cur || typeof cur !== 'object') continue
+
+    if (Array.isArray(cur)) {
+      for (const item of cur) {
+        if (item && typeof item === 'object') stack.push(item)
+      }
+      continue
+    }
+
+    for (const [k, v] of Object.entries(cur)) {
+      if (k === targetKey) {
+        try {
+          delete cur[k]
+        } catch (_) {}
+        continue
+      }
+      if (v && typeof v === 'object') stack.push(v)
+    }
+  }
 }
 
 const mergeObjectsWithEnv = (base, extra) => {
@@ -198,7 +242,96 @@ const ensureWindowsClaudeJson = (homeOnC) => {
   }
 }
 
-const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC, preferLink) => {
+const ensureWindowsClaudeDotDir = (homeOnC) => {
+  const home = String(homeOnC || '').trim()
+  if (!home) return null
+
+  const target = path.join(home, '.claude')
+
+  const isNonEmptyDir = (p) => {
+    try {
+      const st = fs.statSync(p)
+      if (!st.isDirectory()) return false
+      const entries = fs.readdirSync(p)
+      return entries.length > 0
+    } catch (_) {
+      return false
+    }
+  }
+
+  const isEmptyDir = (p) => {
+    try {
+      const st = fs.statSync(p)
+      if (!st.isDirectory()) return false
+      const entries = fs.readdirSync(p)
+      return entries.length === 0
+    } catch (_) {
+      return false
+    }
+  }
+
+  try {
+    if (isNonEmptyDir(target)) return target
+  } catch (_) {}
+
+  const candidates = []
+  const pushHome = (p) => {
+    const v = String(p || '').trim()
+    if (!v) return
+    if (v.toLowerCase() === home.toLowerCase()) return
+    candidates.push(v)
+  }
+
+  pushHome(process.env.USERPROFILE)
+  pushHome(process.env.HOME)
+  try {
+    pushHome(app.getPath('home'))
+  } catch (_) {}
+  try {
+    pushHome(os.homedir())
+  } catch (_) {}
+
+  // If the target doesn't exist (or is empty), try to preserve existing sessions by junctioning
+  // to a legacy "~/.claude" directory (e.g. D:\Users\...\.claude).
+  const shouldReplace = (() => {
+    try {
+      if (!fs.existsSync(target)) return true
+      const lst = fs.lstatSync(target)
+      if (lst.isSymbolicLink()) return false
+      if (lst.isDirectory()) return isEmptyDir(target)
+      return false
+    } catch (_) {
+      return false
+    }
+  })()
+
+  if (shouldReplace) {
+    for (const h of candidates) {
+      const src = path.join(h, '.claude')
+      if (!isNonEmptyDir(src)) continue
+      try {
+        if (fs.existsSync(target)) {
+          fs.rmSync(target, { recursive: true, force: true })
+        }
+      } catch (_) {}
+      try {
+        fs.symlinkSync(src, target, 'junction')
+        return target
+      } catch (_) {
+        // continue
+      }
+    }
+  }
+
+  try {
+    fs.mkdirSync(target, { recursive: true })
+    return target
+  } catch (_) {
+    return null
+  }
+}
+
+const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC) => {
   const homeOnC = String(windowsHomeOnC || '').trim()
   if (!homeOnC) return { mode: 'none' }
 
@@ -206,29 +339,109 @@ const installClaudeJsonIntoProfile = (profileHome, windowsHomeOnC, preferLink) =
   if (!globalPath) return { mode: 'none' }
 
   const target = path.join(String(profileHome || ''), '.claude.json')
+
+  // If a previous version created a hardlink/symlink to the global .claude.json,
+  // break that link to avoid config bleed across templates.
   try {
-    fs.rmSync(target, { force: true })
+    if (fs.existsSync(target)) {
+      try {
+        const lst = fs.lstatSync(target)
+        if (lst.isSymbolicLink()) {
+          fs.rmSync(target, { force: true })
+        } else {
+          try {
+            const stTarget = fs.statSync(target)
+            const stGlobal = fs.statSync(globalPath)
+            if (stTarget.dev === stGlobal.dev && stTarget.ino && stTarget.ino === stGlobal.ino) {
+              fs.rmSync(target, { force: true })
+            } else {
+              return { mode: 'existing' }
+            }
+          } catch (_) {
+            return { mode: 'existing' }
+          }
+        }
+      } catch (_) {
+        return { mode: 'existing' }
+      }
+    }
   } catch (_) {}
 
-  if (preferLink) {
-    // Prefer hardlink (no admin required) and fall back to symlink where possible.
-    try {
-      fs.linkSync(globalPath, target)
-      return { mode: 'hardlink' }
-    } catch (_) {}
-
-    try {
-      fs.symlinkSync(globalPath, target, 'file')
-      return { mode: 'symlink' }
-    } catch (_) {}
-  }
-
   try {
-    fs.copyFileSync(globalPath, target)
+    // Copy while stripping session-carrying fields that can cause cross-profile bleed.
+    // Claude Code is expected to keep this file as JSON; if parsing fails, fall back to a raw copy.
+    try {
+      const raw = fs.readFileSync(globalPath, 'utf8')
+      const doc = parseJsonObject(raw)
+      if (doc) {
+        deleteKeyDeep(doc, 'lastSessionId')
+        deleteKeyDeep(doc, 'projects')
+        fs.writeFileSync(target, JSON.stringify(doc, null, 2) + '\n', 'utf8')
+      } else {
+        fs.copyFileSync(globalPath, target)
+      }
+    } catch (_) {
+      fs.copyFileSync(globalPath, target)
+    }
     return { mode: 'copy' }
   } catch (_) {
     return { mode: 'none' }
   }
+}
+
+const installClaudeDotDirIntoProfile = (profileHome, windowsHomeOnC) => {
+  const homeOnC = String(windowsHomeOnC || '').trim()
+  if (!homeOnC) return { mode: 'none' }
+
+  const profileRoot = String(profileHome || '').trim()
+  if (!profileRoot) return { mode: 'none' }
+
+  const globalDir = ensureWindowsClaudeDotDir(homeOnC)
+  if (!globalDir) return { mode: 'none' }
+  const target = path.join(profileRoot, '.claude')
+
+  const ensureDir = (p) => {
+    try {
+      fs.mkdirSync(p, { recursive: true })
+      return true
+    } catch (_) {
+      return false
+    }
+  }
+
+  const tryJunction = () => {
+    try {
+      // Junction doesn't require admin privileges (unlike directory symlink on some setups).
+      fs.symlinkSync(globalDir, target, 'junction')
+      return true
+    } catch (_) {
+      return false
+    }
+  }
+
+  // If profile already has a non-empty ".claude" dir, keep it as-is.
+  // If it's an empty directory, replace it with a junction to the global home to preserve sessions.
+  try {
+    if (fs.existsSync(target)) {
+      const lst = fs.lstatSync(target)
+      if (lst.isSymbolicLink()) return { mode: 'existing' }
+      if (!lst.isDirectory()) return { mode: 'existing' }
+      const entries = fs.readdirSync(target)
+      if (entries.length > 0) return { mode: 'existing' }
+      try {
+        fs.rmSync(target, { recursive: true, force: true })
+      } catch (_) {
+        return { mode: 'existing' }
+      }
+    }
+  } catch (_) {
+    return { mode: 'none' }
+  }
+
+  // globalDir is ensured by ensureWindowsClaudeDotDir(); keep this check as extra safety.
+  if (!ensureDir(globalDir)) return { mode: 'none' }
+  if (tryJunction()) return { mode: 'junction' }
+  return { mode: 'none' }
 }
 
 class PTYManager {
@@ -362,10 +575,15 @@ class PTYManager {
       fs.writeFileSync(path.join(profileHome, 'settings.json'), payload, 'utf8')
 
       // Keep Claude Code sessions pinned to C:\Users\<name>\.claude.json on Windows.
-      // Optionally link (hardlink/symlink) it into each CLAUDE_CONFIG_DIR profile; otherwise copy it.
-      const preferLink = Boolean(config?.mpsClaudeJsonLink)
+      // Always copy .claude.json into the per-template profile dir. We intentionally do NOT
+      // hardlink/symlink because Claude Code can write to this file and we must avoid config bleed.
       const windowsHome = process.platform === 'win32' ? resolveWindowsUserHomeOnC() : ''
-      if (windowsHome) installClaudeJsonIntoProfile(profileHome, windowsHome, preferLink)
+      if (windowsHome) {
+        installClaudeJsonIntoProfile(profileHome, windowsHome)
+        // Claude Code stores most conversation/project state under "~/.claude/" (not in ".claude.json").
+        // Link it into the profile home so copying ".claude.json" doesn't lose existing sessions.
+        installClaudeDotDirIntoProfile(profileHome, windowsHome)
+      }
       return profileHome
     } catch (_) {
       return null
@@ -495,6 +713,15 @@ class PTYManager {
     const useProxy = Boolean(base?.useCCSwitchProxy)
     const useCCSwitch = Boolean(base?.useCCSwitch) || useProxy
     if (!useCCSwitch) return { config: base, extraEnv: {} }
+
+    // Safety: only allow CC Switch runtime rewrites for templates imported from CC Switch.
+    // This prevents accidental bleed-over when users switch between CC Switch and built-in configs.
+    if (!isImportedFromCCSwitch(base)) {
+      base.useCCSwitch = false
+      base.useCCSwitchProxy = false
+      base.ccSwitchProviderId = ''
+      return { config: base, extraEnv: {} }
+    }
 
     const type = typeof base?.type === 'string' ? base.type : ''
     const appKey =
@@ -650,15 +877,17 @@ class PTYManager {
       env.CLAUDE_CONFIG_DIR = claudeProfileHome
     }
 
-    // Claude Code uses the Windows user home for ~/.claude.json. Always pin it to the C: user
-    // profile so CCSWITCH/non-CCSWITCH sessions share the same global config.
+    // Claude Code uses the Windows user home for ~/.claude.json.
+    // We always isolate it to the per-template profile dir to avoid config bleed across templates.
     if (isClaudeCode && process.platform === 'win32') {
-      const homeOnC = resolveWindowsUserHomeOnC()
-      if (homeOnC) {
-        env.USERPROFILE = homeOnC
-        env.HOME = homeOnC
-        const drive = homeOnC.slice(0, 2)
-        const rest = homeOnC.slice(2).replace(/\//g, '\\')
+      const desiredHome = claudeProfileHome || ''
+      if (!desiredHome) {
+        // best-effort: keep the default inherited USERPROFILE
+      } else {
+        env.USERPROFILE = desiredHome
+        env.HOME = desiredHome
+        const drive = desiredHome.slice(0, 2)
+        const rest = desiredHome.slice(2).replace(/\//g, '\\')
         if (/^[A-Za-z]:$/.test(drive)) env.HOMEDRIVE = drive
         if (rest.startsWith('\\')) env.HOMEPATH = rest
       }

@@ -817,9 +817,9 @@ html {
   height: 100%;
   background-color: var(--bg-color);
   overflow: hidden;
-  border-radius: var(--radius-lg); /* The main rounded corner */
-  border: 1px solid var(--border-color); /* Subtle border to define edges */
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05); /* Inner light stroke */
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 .content {
@@ -829,8 +829,6 @@ html {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-bottom-left-radius: var(--radius-lg);
-  border-bottom-right-radius: var(--radius-lg);
 }
 
 .shell-view,
@@ -841,6 +839,8 @@ html {
   display: flex;
   flex-direction: column;
   background-color: var(--bg-color);
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
 }
 
 .shell-view {
@@ -916,8 +916,8 @@ html {
   inset: 0;
   width: 100vw;
   height: 100vh;
-  background-color: rgba(0, 0, 0, 0.7); /* Darker overlay */
-  backdrop-filter: blur(12px);
+  background-color: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
   z-index: 2500;
   display: flex;
   align-items: center;
@@ -928,16 +928,17 @@ html {
 .modal-container {
   min-width: 480px;
   max-width: 90%;
-  animation: modal-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: modal-slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: var(--shadow-lg);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
+  overflow: hidden;
 }
 
 @keyframes modal-slide-up {
   from {
     opacity: 0;
-    transform: translateY(16px) scale(0.98);
+    transform: translateY(12px) scale(0.98);
   }
   to {
     opacity: 1;

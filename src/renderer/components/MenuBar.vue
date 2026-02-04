@@ -873,6 +873,7 @@ const syncUpdateState = (payload) => {
   height: 22px;
   flex: 0 0 auto;
   cursor: pointer;
+  padding: 2px 0;
 }
 
 .close-mode-input {
@@ -885,22 +886,26 @@ const syncUpdateState = (payload) => {
 
 .close-mode-track {
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 0;
+  right: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.14);
   transition: background 0.15s ease, border-color 0.15s ease;
+  transform: translateY(-50%);
 }
 
 .close-mode-thumb {
   position: absolute;
-  top: 2px;
+  top: 50%;
   left: 2px;
   width: 18px;
   height: 18px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.85);
   transition: transform 0.15s ease;
+  transform: translateY(-50%);
 }
 
 .close-mode-input:checked + .close-mode-track {
@@ -909,7 +914,7 @@ const syncUpdateState = (payload) => {
 }
 
 .close-mode-input:checked + .close-mode-track + .close-mode-thumb {
-  transform: translateX(24px);
+  transform: translate(24px, -50%);
 }
 
 .field {

@@ -128,7 +128,6 @@ export default {
     onlyCCSwitchConfigs: '\u53ea\u4f7f\u7528CCSwitch\u914d\u7f6e',
     ccswitchAutoDetect: '\u81ea\u52a8\u68c0\u6d4b',
     ccswitchRefresh: '\u5237\u65b0',
-    check: '\u6821\u9a8c',
     ccswitchStatus: 'CCSwitch',
     ccswitchProxy: '\u4ee3\u7406',
     ccswitchFailover: '\u6545\u969c\u8f6c\u79fb',
@@ -142,10 +141,6 @@ export default {
     ccswitchMissingStatus: '\u672a\u68c0\u6d4b\u5230',
     ccswitchMissingHint:
       '\u672a\u68c0\u6d4b\u5230 CC Switch\uff08{path}\uff09\u3002\u5982\u672a\u5b89\u88c5\u6216\u672a\u521d\u59cb\u5316 CC Switch\uff0c\u53ef\u4ee5\u4fdd\u6301\u201c\u81ea\u52a8\u68c0\u6d4b\u201d\u5173\u95ed\u3002',
-    claudeJsonLink: '\u8f6f\u5f15\u5bfc .claude.json\uff08Claude Code\uff09',
-    claudeJsonLinkSupported: '\u8f6f\u5f15\u5bfc\u652f\u6301\uff08{method}\uff09',
-    claudeJsonLinkUnsupported:
-      '\u8f6f\u5f15\u5bfc\u4e0d\u652f\u6301\uff0c\u5c06\u56de\u9000\u4e3a\u590d\u5236\u3002{error}',
     emptyList: '\u8be5\u5206\u7c7b\u6682\u65e0\u914d\u7f6e',
     close: '关闭',
     availableTemplates: '可用配置',

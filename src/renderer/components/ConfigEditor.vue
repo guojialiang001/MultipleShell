@@ -82,8 +82,6 @@ const isCodex = computed(() => form.value.type === 'codex')
 const isClaudeCode = computed(() => form.value.type === 'claude-code')
 const isOpenCode = computed(() => form.value.type === 'opencode')
 
-const isCCSwitchImported = computed(() => String(form.value.importSource || '') === 'ccswitch')
-
 const getTemplateJsonForType = (type) => {
   return JSON.stringify({ env: {} }, null, 2)
 }
@@ -487,9 +485,6 @@ const save = () => {
     
     <div class="content-body" :class="{ 'codex-split': codexSplit }">
       <div class="left-pane">
-          <div v-if="isCCSwitchImported" class="ccswitch-imported-callout">
-            {{ t('configEditor.ccswitchImportedHint') }}
-          </div>
           <div class="form-group">
           <label>{{ t('configEditor.type') }}</label>
           <div class="custom-select" ref="dropdownRef">
@@ -519,31 +514,9 @@ const save = () => {
           </div>
 
           <div class="form-group">
-          <label>{{ t('configEditor.name') }}</label>
-          <input v-model="form.name" type="text" :placeholder="t('configEditor.placeholders.name')" />
-          </div>
-
-          <div class="form-group">
-            <label>{{ t('configEditor.ccSwitchTitle') }}</label>
-            <div class="ccswitch-row">
-              <label class="ccswitch-toggle">
-                <input type="checkbox" v-model="form.useCCSwitch" />
-                <span>{{ t('configSelector.useCCSwitch') }}</span>
-              </label>
-              <label class="ccswitch-toggle">
-                <input type="checkbox" v-model="form.useCCSwitchProxy" />
-                <span>{{ t('configSelector.useCCSwitchProxy') }}</span>
-              </label>
-            </div>
-            <div v-if="form.useCCSwitch" class="ccswitch-provider">
-              <label class="ccswitch-provider-label">{{ t('configEditor.ccSwitchProviderId') }}</label>
-              <input
-                v-model="form.ccSwitchProviderId"
-                type="text"
-                :placeholder="t('configEditor.ccSwitchProviderIdPlaceholder')"
-              />
-            </div>
-          </div>
+           <label>{{ t('configEditor.name') }}</label>
+           <input v-model="form.name" type="text" :placeholder="t('configEditor.placeholders.name')" />
+           </div>
 
           <div v-if="!isCodex && !isClaudeCode && !isOpenCode" class="form-group">
             <label>{{ t('configEditor.configJson') }}</label>
@@ -705,18 +678,6 @@ const save = () => {
   background: var(--surface-hover);
 }
 
-.ccswitch-imported-callout {
-  margin: 0 0 14px 0;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(250, 204, 21, 0.28);
-  background: rgba(250, 204, 21, 0.08);
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-
 h3 {
   margin: 0;
   color: var(--text-primary);
@@ -841,56 +802,6 @@ h3 {
 
 .form-group {
   margin-bottom: 20px;
-}
-
-.ccswitch-row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.ccswitch-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-}
-
-.ccswitch-toggle:hover {
-  color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
-.ccswitch-toggle input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: transparent;
-}
-
-.ccswitch-provider {
-  margin-top: 12px;
-}
-
-.ccswitch-provider-label {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 label {

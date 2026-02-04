@@ -211,6 +211,7 @@ Only three template types are supported (and validated by the main process):
 - You edit the content of a `settings.json` file (JSON text).
 - When a session starts, the main process writes it to `<userData>/claude-homes/<configId>/settings.json` and sets `CLAUDE_CONFIG_DIR` to that directory.
 - Windows: sessions always use `C:\\Users\\<username>\\.claude.json` as Claude Code's "home" config; if missing it is created as `{}` (it will not copy/use `.claude.json.backup`).
+- Windows: Claude Code also stores most conversation/project state under `~/.claude/`. When available, MultipleShell links `<userData>/claude-homes/<configId>/.claude/` to the global `C:\\Users\\<username>\\.claude\\` (junction) so existing sessions are preserved.
 - Optional toggle "Soft-guide .claude.json (Claude Code)" (in "Manage configs", under the Claude Code category, above the "Available configs" list):
   - When enabled, it tries hardlink/symlink first to link `C:\\Users\\<username>\\.claude.json` to the one under `CLAUDE_CONFIG_DIR` (falls back to copying on failure).
   - Goal: keep `.claude.json` consistent across profiles and avoid config drift.

@@ -17,7 +17,7 @@ const props = defineProps({
 const emit = defineEmits(['create', 'update', 'saveTemplate', 'deleteTemplate', 'close', 'switchMode', 'importFromCCSwitch'])
 const { t } = useI18n()
 
-const selectedConfig = ref(null)
+const selectedConfigId = ref('')
 const customWorkingDir = ref('')
 const showEditor = ref(false)
 const editingConfig = ref(null)
@@ -33,7 +33,6 @@ const TYPE_ORDER = ['claude-code', 'codex', 'opencode']
 const ONLY_CCSWITCH_CONFIGS_KEY = 'mps.selectTemplate.onlyCCSwitchConfigs'
 const LEGACY_ONLY_CCSWITCH_CONFIGS_KEY = 'mps.manageTemplates.onlyCCSwitchConfigs'
 const CCSWITCH_AUTODETECT_KEY = 'mps.selectTemplate.ccswitchAutoDetect'
-const CLAUDE_JSON_LINK_KEY = 'mps.selectTemplate.claudeJsonLink'
 
 const readBool = (key, fallback = false) => {
   try {
@@ -70,10 +69,6 @@ const ccSwitchRecentRequests = ref([]) // Array<{ appType: string, path: string,
 const ccSwitchDetectError = ref('')
 const ccSwitchDetectHint = ref('')
 
-const claudeJsonLinkEnabled = ref(readBool(CLAUDE_JSON_LINK_KEY, false))
-const claudeJsonLinkSupported = ref(null) // boolean | null
-const claudeJsonLinkMessage = ref('')
-
 const resolveProxyAppKeyForType = (type) => {
   const t = normalizeType(type)
   if (t === 'claude-code') return 'claude'
@@ -93,35 +88,6 @@ const resetCCSwitchStatus = () => {
   ccSwitchRecentRequests.value = []
   ccSwitchDetectError.value = ''
   ccSwitchDetectHint.value = ''
-}
-
-const refreshClaudeJsonLinkSupport = async () => {
-  if (props.mode !== 'create' && props.mode !== 'manage') return
-  if (normalizeType(activeType.value) !== 'claude-code') return
-  if (!claudeJsonLinkEnabled.value) return
-
-  const api = window?.electronAPI
-  if (!api?.claudeJsonLinkCheck) {
-    claudeJsonLinkSupported.value = false
-    claudeJsonLinkMessage.value = 'Missing electronAPI.claudeJsonLinkCheck'
-    return
-  }
-
-  try {
-    const res = await api.claudeJsonLinkCheck()
-    const supported = Boolean(res?.supported)
-    claudeJsonLinkSupported.value = supported
-    if (supported) {
-      claudeJsonLinkMessage.value = t('configSelector.claudeJsonLinkSupported', { method: String(res?.method || '') })
-    } else {
-      claudeJsonLinkMessage.value = t('configSelector.claudeJsonLinkUnsupported', { error: String(res?.error || '') })
-    }
-  } catch (err) {
-    claudeJsonLinkSupported.value = false
-    claudeJsonLinkMessage.value = t('configSelector.claudeJsonLinkUnsupported', {
-      error: err?.message ? String(err.message) : String(err || '')
-    })
-  }
 }
 
 const normalizeProxyHost = (host) => {
@@ -272,6 +238,19 @@ const filteredTemplates = computed(() => {
   return list.filter((cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy))
 })
 
+const resolveConfigKey = (cfg) => String(cfg?.id || cfg?.name || '').trim()
+
+const selectedConfig = computed(() => {
+  if (props.mode !== 'create') return null
+  const key = String(selectedConfigId.value || '').trim()
+  if (!key) return null
+  return (filteredTemplates.value || []).find((cfg) => resolveConfigKey(cfg) === key) || null
+})
+
+const selectConfig = (cfg) => {
+  selectedConfigId.value = resolveConfigKey(cfg)
+}
+
 const getVisibleTemplatesForType = (templates, type) => {
   const current = normalizeType(type)
   const list = (Array.isArray(templates) ? templates : []).filter((cfg) => normalizeType(cfg?.type) === current)
@@ -326,7 +305,7 @@ watch(
   () => {
     showEditor.value = false
     editingConfig.value = null
-    selectedConfig.value = null
+    selectedConfigId.value = ''
     customWorkingDir.value = ''
     activeType.value = 'claude-code'
     showDeleteConfirm.value = false
@@ -343,7 +322,7 @@ watch(onlyCCSwitchConfigs, (v) => {
   const cfg = selectedConfig.value
   if (!cfg) return
   const isCCSwitch = Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy)
-  if (!isCCSwitch) selectedConfig.value = null
+  if (!isCCSwitch) selectedConfigId.value = ''
 })
 
 watch(autoDetectCCSwitchStatus, async (v) => {
@@ -353,13 +332,6 @@ watch(autoDetectCCSwitchStatus, async (v) => {
     return
   }
   await refreshCCSwitchStatus()
-})
-
-watch(claudeJsonLinkEnabled, async (v) => {
-  writeBool(CLAUDE_JSON_LINK_KEY, Boolean(v))
-  claudeJsonLinkSupported.value = null
-  claudeJsonLinkMessage.value = ''
-  if (v) await refreshClaudeJsonLinkSupport()
 })
 
 watch(
@@ -383,9 +355,8 @@ watch(
 )
 
 watch(activeType, () => {
-  selectedConfig.value = null
+  selectedConfigId.value = ''
   refreshCCSwitchStatus()
-  refreshClaudeJsonLinkSupport()
 })
 
 watch(
@@ -393,7 +364,7 @@ watch(
   (candidate) => {
     if (!candidate) return
     if (selectedConfig.value) return
-    selectedConfig.value = candidate
+    selectConfig(candidate)
   },
   { immediate: true }
 )
@@ -432,9 +403,6 @@ const createTerminal = () => {
   const cfg = selectedConfig.value || autoPickCandidate.value
   if (!cfg) return
   const payload = toPlain(cfg)
-  if (normalizeType(payload?.type) === 'claude-code') {
-    payload.mpsClaudeJsonLink = Boolean(claudeJsonLinkEnabled.value)
-  }
   emit('create', payload, customWorkingDir.value)
 }
 
@@ -445,9 +413,6 @@ const saveConfig = async (config) => {
     await emit('saveTemplate', config)
   } else {
     const payload = toPlain(config)
-    if (normalizeType(payload?.type) === 'claude-code') {
-      payload.mpsClaudeJsonLink = Boolean(claudeJsonLinkEnabled.value)
-    }
     emit('create', payload, customWorkingDir.value)
   }
   showEditor.value = false
@@ -545,7 +510,6 @@ watch(
 onMounted(() => {
   refreshCCSwitchStatus()
   refreshCCSwitchRecentRequests()
-  refreshClaudeJsonLinkSupport()
 })
 
 onBeforeUnmount(() => {
@@ -657,37 +621,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="mode === 'manage' && activeType === 'claude-code'" class="category-panel">
-          <div class="category-box">
-            <div class="category-item">
-              <label class="slide-toggle" @click.stop>
-                <input v-model="claudeJsonLinkEnabled" type="checkbox" @click.stop />
-                <span class="slide-toggle-slider" aria-hidden="true"></span>
-                <span class="slide-toggle-text">{{ t('configSelector.claudeJsonLink') }}</span>
-              </label>
-              <button
-                class="btn-ghost-small"
-                type="button"
-                :disabled="!claudeJsonLinkEnabled"
-                @click.stop="refreshClaudeJsonLinkSupport"
-              >
-                {{ t('configSelector.check') }}
-              </button>
-            </div>
-
-            <div v-if="claudeJsonLinkEnabled && claudeJsonLinkMessage" class="status-hint">
-              {{ claudeJsonLinkMessage }}
-            </div>
-          </div>
-        </div>
-
         <label class="section-label">{{ t('configSelector.availableTemplates') }}</label>
         <div v-if="filteredTemplates.length > 0" class="config-list">
           <div
             v-for="config in filteredTemplates"
             :key="config.id || config.name"
-            :class="['config-item', { active: selectedConfig === config }]"
-            @click="mode === 'create' ? (selectedConfig = config) : null"
+            :class="['config-item', { active: selectedConfigId === resolveConfigKey(config) }]"
+            @click="mode === 'create' ? selectConfig(config) : null"
           >
             <div class="config-icon">
                <!-- Simple generic code icon or letter based on type -->
@@ -715,7 +655,7 @@ onBeforeUnmount(() => {
                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
               </button>
             </div>
-            <div v-if="mode === 'create' && selectedConfig === config" class="check-icon">
+            <div v-if="mode === 'create' && selectedConfigId === resolveConfigKey(config)" class="check-icon">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </div>
           </div>
@@ -842,8 +782,8 @@ h3 {
 .category-box {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 12px;
+  padding: 14px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -858,18 +798,18 @@ h3 {
 
 .btn-ghost-small {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-secondary);
-  border-radius: 10px;
-  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   transition: all 0.2s;
 }
 
 .btn-ghost-small:hover:enabled {
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.04);
 }
 
@@ -985,9 +925,10 @@ h3 {
 .slide-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   cursor: pointer;
   user-select: none;
+  padding: 4px 0;
 }
 
 .slide-toggle input {
@@ -1000,11 +941,11 @@ h3 {
 
 .slide-toggle-slider {
   position: relative;
-  width: 40px;
-  height: 22px;
+  width: 44px;
+  height: 24px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   transition: background 0.2s, border-color 0.2s;
   flex-shrink: 0;
 }
@@ -1013,22 +954,23 @@ h3 {
   content: '';
   position: absolute;
   left: 2px;
-  top: 2px;
+  top: 50%;
   width: 18px;
   height: 18px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
   transition: transform 0.2s, background 0.2s;
+  transform: translateY(-50%);
 }
 
 .slide-toggle input:checked + .slide-toggle-slider {
-  background: rgba(59, 130, 246, 0.6);
-  border-color: rgba(59, 130, 246, 0.8);
+  background: rgba(59, 130, 246, 0.5);
+  border-color: rgba(59, 130, 246, 0.7);
 }
 
 .slide-toggle input:checked + .slide-toggle-slider::before {
-  transform: translateX(18px);
+  transform: translate(20px, -50%);
   background: rgba(255, 255, 255, 0.98);
 }
 
@@ -1231,17 +1173,23 @@ input:focus {
   padding: 10px 20px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s ease;
 }
 
 .btn-primary:hover {
   background: var(--primary-hover);
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
 }
 
 .btn-primary:disabled {
   background: var(--surface-active);
   color: var(--text-secondary);
   cursor: not-allowed;
+  transform: none;
 }
 
 .btn-secondary {
@@ -1252,12 +1200,16 @@ input:focus {
   padding: 10px 16px;
   cursor: pointer;
   font-size: 13px;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
 }
 
 .btn-secondary:hover {
   background: var(--surface-hover);
   border-color: var(--text-secondary);
+}
+
+.btn-secondary:active {
+  transform: translateY(0);
 }
 
 .btn-secondary:disabled {
@@ -1286,12 +1238,13 @@ input:focus {
 .confirm-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 5;
+  border-radius: var(--radius-lg);
 }
 
 .confirm-modal {
@@ -1299,11 +1252,23 @@ input:focus {
   background: var(--surface-color);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  padding: 18px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  animation: confirm-pop 0.2s ease-out;
+}
+
+@keyframes confirm-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .confirm-title {
@@ -1315,28 +1280,36 @@ input:focus {
 .confirm-message {
   font-size: 13px;
   color: var(--text-secondary);
-  line-height: 1.4;
+  line-height: 1.5;
   white-space: pre-line;
 }
 
 .confirm-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
   margin-top: 4px;
 }
 
 .btn-danger {
-  background: rgba(239, 68, 68, 0.16);
-  color: #fecaca;
-  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
   border-radius: var(--radius-md);
   padding: 10px 16px;
   font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
 
 .btn-danger:hover {
-  background: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.6);
+  transform: translateY(-1px);
+}
+
+.btn-danger:active {
+  transform: translateY(0);
 }
 
 .empty-hint {

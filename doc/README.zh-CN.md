@@ -213,6 +213,7 @@ node .\\scripts\\monitor-stresscheck.js
 - 你编辑的是一份 `settings.json` 的内容（JSON 文本）。
 - 启动会话时主进程会将其写入：`<userData>/claude-homes/<configId>/settings.json`，并设置环境变量 `CLAUDE_CONFIG_DIR` 指向该目录。
 - Windows：会话会统一使用 `C:\\Users\\<username>\\.claude.json` 作为 Claude Code 的主目录配置；若不存在会自动创建 `{}`（不会复制/使用 `.claude.json.backup`）。
+- Windows：Claude Code 的大部分对话/项目状态会写入 `~/.claude/` 目录。MultipleShell 会尽量把 `<userData>/claude-homes/<configId>/.claude/` 链接到全局的 `C:\\Users\\<username>\\.claude\\`（junction），避免切换 profile 后“会话丢失”。
 - 可选：“软引导 .claude.json（Claude Code）”开关（“管理配置”里，Claude Code 分类下，位于“可用配置”列表上方）：
   - 开启后会优先尝试 hardlink/symlink，把 `C:\\Users\\<username>\\.claude.json` 链接到 `CLAUDE_CONFIG_DIR` 下（失败则回退为复制）。
   - 目的：让 profile 目录内的 `.claude.json` 与主目录保持一致，避免不同 profile 配置漂移。
