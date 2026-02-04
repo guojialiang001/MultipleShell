@@ -27,6 +27,8 @@ const REMOTE_CLIENT_ID_BASE64_KEY = 'mps.remote.clientIdBase64'
 const REMOTE_SYSTEM_RDP_PORT_KEY = 'mps.remote.systemRdpPort'
 const REMOTE_RDP_CONFIGURED_KEY = 'mps.remote.rdpConfigured'
 const MONITOR_THUMBNAIL_MODE_KEY = 'mps.monitor.thumbnailMode' // card | terminal
+const CLOSE_CONFIRM_MODE_KEY = 'mps.close.confirmMode' // input | dblclick
+const LEGACY_CLOSE_CONFIRM_ENABLED_KEY = 'mps.close.confirmEnabled'
 
 const REMOTE_APP_ALIAS = '||MultipleShell'
 
@@ -36,6 +38,14 @@ const readLocalStorage = (key, fallback = '') => {
     return value === null ? fallback : String(value)
   } catch (_) {
     return fallback
+  }
+}
+
+const getLocalStorageItem = (key) => {
+  try {
+    return localStorage.getItem(key)
+  } catch (_) {
+    return null
   }
 }
 
@@ -57,6 +67,12 @@ const notifyMonitorSettingsChanged = () => {
   } catch (_) {}
 }
 
+const notifyCloseSettingsChanged = () => {
+  try {
+    window.dispatchEvent(new Event('mps:close-settings'))
+  } catch (_) {}
+}
+
 const parseBool = (value, fallback = false) => {
   const raw = String(value ?? '').trim().toLowerCase()
   if (!raw) return fallback
@@ -69,6 +85,12 @@ const normalizeMonitorThumbnailMode = (value) => {
   return 'card'
 }
 
+const normalizeCloseConfirmMode = (value) => {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === 'dblclick' || raw === 'doubleclick' || raw === 'double') return 'dblclick'
+  return 'input'
+}
+
 const remoteBaseUrl = ref(readLocalStorage(REMOTE_BASE_URL_KEY, ''))
 const remoteAppEnabled = ref(parseBool(readLocalStorage(REMOTE_REMOTEAPP_ENABLED_KEY, '0'), false))
 const remoteAppClientId = ref(readLocalStorage(REMOTE_REMOTEAPP_CLIENT_ID_KEY, ''))
@@ -77,6 +99,29 @@ const clientIdBase64 = ref(parseBool(readLocalStorage(REMOTE_CLIENT_ID_BASE64_KE
 const systemRdpPort = ref(readLocalStorage(REMOTE_SYSTEM_RDP_PORT_KEY, '3389') || '3389')
 const rdpConfigured = ref(parseBool(readLocalStorage(REMOTE_RDP_CONFIGURED_KEY, '0'), false))
 const monitorThumbnailMode = ref(normalizeMonitorThumbnailMode(readLocalStorage(MONITOR_THUMBNAIL_MODE_KEY, 'card')))
+const closeConfirmMode = ref((() => {
+  const rawMode = getLocalStorageItem(CLOSE_CONFIRM_MODE_KEY)
+  if (rawMode != null) return normalizeCloseConfirmMode(rawMode)
+
+  const legacy = getLocalStorageItem(LEGACY_CLOSE_CONFIRM_ENABLED_KEY)
+  if (legacy != null) {
+    const enabled = parseBool(legacy, true)
+    return enabled ? 'input' : 'dblclick'
+  }
+
+  return 'input'
+})())
+
+const closeConfirmModeIsDblclick = computed({
+  get() {
+    return closeConfirmMode.value === 'dblclick'
+  },
+  set(v) {
+    closeConfirmMode.value = v ? 'dblclick' : 'input'
+  }
+})
+
+const isCloseModeInput = computed(() => closeConfirmMode.value === 'input')
 
 const remoteBaseUrlValidation = computed(() => validateHttpUrl(remoteBaseUrl.value))
 const remoteBaseUrlError = computed(() => {
@@ -159,6 +204,15 @@ watch(monitorThumbnailMode, (value) => {
   }
   writeLocalStorage(MONITOR_THUMBNAIL_MODE_KEY, normalized)
   notifyMonitorSettingsChanged()
+})
+watch(closeConfirmMode, (value) => {
+  const normalized = normalizeCloseConfirmMode(value)
+  if (value !== normalized) {
+    closeConfirmMode.value = normalized
+    return
+  }
+  writeLocalStorage(CLOSE_CONFIRM_MODE_KEY, normalized)
+  notifyCloseSettingsChanged()
 })
 
 const updateStatus = computed(() => updateState.value?.state || 'idle')
@@ -282,7 +336,9 @@ const isCloseInputValid = computed(() => closePromptInput.value.trim().toLowerCa
 const openClosePrompt = () => {
   closePromptInput.value = ''
   showClosePrompt.value = true
-  nextTick(() => closeInputRef.value?.focus())
+  if (isCloseModeInput.value) {
+    nextTick(() => closeInputRef.value?.focus())
+  }
 }
 
 const dismissClosePrompt = () => {
@@ -291,7 +347,14 @@ const dismissClosePrompt = () => {
 }
 
 const confirmClosePrompt = () => {
+  if (!isCloseModeInput.value) return
   if (!isCloseInputValid.value) return
+  dismissClosePrompt()
+  window?.electronAPI?.windowClose?.()
+}
+
+const forceClosePrompt = () => {
+  if (isCloseModeInput.value) return
   dismissClosePrompt()
   window?.electronAPI?.windowClose?.()
 }
@@ -468,6 +531,23 @@ const syncUpdateState = (payload) => {
               </button>
             </div>
 
+            <div class="section-label section-label--tight">{{ t('app.settingsTitle') }}</div>
+            <div class="remote-card">
+              <div class="close-mode-row">
+                <span class="close-mode-opt" :class="{ active: closeConfirmMode === 'input' }">
+                  {{ t('app.closeConfirmModeInput') }}
+                </span>
+                <label class="close-mode-switch" :aria-label="t('app.closeConfirmModeLabel')">
+                  <input class="close-mode-input" type="checkbox" v-model="closeConfirmModeIsDblclick" />
+                  <span class="close-mode-track" aria-hidden="true"></span>
+                  <span class="close-mode-thumb" aria-hidden="true"></span>
+                </label>
+                <span class="close-mode-opt" :class="{ active: closeConfirmMode === 'dblclick' }">
+                  {{ t('app.closeConfirmModeDblclick') }}
+                </span>
+              </div>
+            </div>
+
             <div class="section-label section-label--tight">{{ t('monitor.settings.title') }}</div>
             <div class="lang-options">
               <button class="lang-option" :class="{ active: monitorThumbnailMode === 'card' }" @click="monitorThumbnailMode = 'card'">
@@ -619,12 +699,19 @@ const syncUpdateState = (payload) => {
     <div v-if="showClosePrompt" class="tab-close-overlay" @click.self="dismissClosePrompt">
       <div class="tab-close-modal" @click.stop>
         <div class="tab-close-header">{{ t('app.confirmExitTitle') }}</div>
-        <div class="tab-close-message">{{ t('app.confirmExitPrompt', { keyword: 'close' }) }}</div>
+        <div class="tab-close-message">
+          {{
+            isCloseModeInput
+              ? t('app.confirmExitPromptInput', { keyword: 'CLOSE' })
+              : t('app.confirmExitPromptDblclick')
+          }}
+        </div>
         <input
+          v-if="isCloseModeInput"
           ref="closeInputRef"
           v-model="closePromptInput"
           class="tab-close-input"
-          :placeholder="t('app.confirmExitPlaceholder', { keyword: 'close' })"
+          :placeholder="t('app.confirmExitPlaceholder', { keyword: 'CLOSE' })"
           @keydown.enter.prevent="confirmClosePrompt"
           @keydown.esc.prevent="dismissClosePrompt"
         />
@@ -633,10 +720,19 @@ const syncUpdateState = (payload) => {
             {{ t('common.cancel') }}
           </button>
           <button
+            v-if="isCloseModeInput"
             class="tab-close-btn tab-close-btn--danger"
             type="button"
             :disabled="!isCloseInputValid"
             @click="confirmClosePrompt"
+          >
+            {{ t('common.close') }}
+          </button>
+          <button
+            v-else
+            class="tab-close-btn tab-close-btn--danger"
+            type="button"
+            @dblclick.prevent="forceClosePrompt"
           >
             {{ t('common.close') }}
           </button>
@@ -751,6 +847,69 @@ const syncUpdateState = (payload) => {
   font-size: 12px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.92);
+}
+
+.close-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.close-mode-opt {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+}
+
+.close-mode-opt.active {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.close-mode-switch {
+  position: relative;
+  width: 46px;
+  height: 22px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.close-mode-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.close-mode-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.close-mode-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  transition: transform 0.15s ease;
+}
+
+.close-mode-input:checked + .close-mode-track {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+.close-mode-input:checked + .close-mode-track + .close-mode-thumb {
+  transform: translateX(24px);
 }
 
 .field {
@@ -1240,6 +1399,10 @@ const syncUpdateState = (payload) => {
 .tab-close-btn:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.tab-close-btn--inactive {
+  opacity: 0.55;
 }
 
 </style>

@@ -288,7 +288,19 @@ const canAutoPickCCSwitchTemplate = computed(() => {
   return ccSwitchProxyEnabled.value === true && ccSwitchFailoverEnabled.value === true
 })
 
-const autoPickCandidate = computed(() => pickDefaultCCSwitchTemplate(filteredTemplates.value))
+const autoPickCandidate = computed(() => {
+  if (props.mode !== 'create') return null
+
+  const list = filteredTemplates.value
+  if (!Array.isArray(list) || list.length === 0) return null
+
+  // Auto-select only when the user has no meaningful choice:
+  // - exactly one visible template, or
+  // - "Only CC Switch configs" + proxy failover is enabled (pick the best CC Switch template).
+  if (list.length === 1) return list[0]
+  if (canAutoPickCCSwitchTemplate.value) return pickDefaultCCSwitchTemplate(list)
+  return null
+})
 
 const isCCSwitchImportedConfig = (cfg) => {
   if (!cfg || typeof cfg !== 'object') return false
@@ -377,9 +389,8 @@ watch(activeType, () => {
 })
 
 watch(
-  [canAutoPickCCSwitchTemplate, autoPickCandidate],
-  ([canAutoPick, candidate]) => {
-    if (!canAutoPick) return
+  autoPickCandidate,
+  (candidate) => {
     if (!candidate) return
     if (selectedConfig.value) return
     selectedConfig.value = candidate

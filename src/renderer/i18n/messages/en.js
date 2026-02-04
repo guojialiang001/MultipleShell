@@ -73,8 +73,13 @@ export default {
     noActiveTerminals: 'No Active Terminals',
     pressCtrlT: 'Press {shortcut} to start a new session',
     newTerminal: 'New Terminal',
+    settingsTitle: 'App',
+    closeConfirmModeLabel: 'Close confirmation',
+    closeConfirmModeInput: 'Type CLOSE',
+    closeConfirmModeDblclick: 'Double-click',
     confirmExitTitle: 'Close MultipleShell?',
-    confirmExitPrompt: 'Type {keyword} to close the app.',
+    confirmExitPromptInput: 'Type {keyword} to close the app.',
+    confirmExitPromptDblclick: 'Double-click Close to close the app.',
     confirmExitPlaceholder: 'Type {keyword} to confirm'
   },
   voice: {
@@ -98,6 +103,8 @@ export default {
     tab: 'Tab',
     confirmCloseTitle: 'Close tab?',
     confirmClosePrompt: 'Type {keyword} to close "{name}".',
+    confirmClosePromptInput: 'Type {keyword} to close "{name}".',
+    confirmClosePromptDblclick: 'Double-click Close to close "{name}".',
     confirmClosePlaceholder: 'Type {keyword} to confirm',
     cwd: 'CWD'
   },

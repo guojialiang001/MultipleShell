@@ -73,8 +73,13 @@ export default {
     noActiveTerminals: '没有活动终端',
     pressCtrlT: '按 {shortcut} 开始新会话',
     newTerminal: '新建终端',
+    settingsTitle: '应用',
+    closeConfirmModeLabel: '关闭确认',
+    closeConfirmModeInput: '输入 CLOSE',
+    closeConfirmModeDblclick: '双击关闭',
     confirmExitTitle: '确认关闭应用？',
-    confirmExitPrompt: '输入 {keyword} 关闭应用。',
+    confirmExitPromptInput: '输入 {keyword} 关闭应用。',
+    confirmExitPromptDblclick: '双击关闭按钮关闭应用。',
     confirmExitPlaceholder: '输入 {keyword} 确认'
   },
 
@@ -99,6 +104,8 @@ export default {
     tab: '标签',
     confirmCloseTitle: '确认关闭标签？',
     confirmClosePrompt: '输入 {keyword} 关闭“{name}”。',
+    confirmClosePromptInput: '输入 {keyword} 关闭“{name}”。',
+    confirmClosePromptDblclick: '双击关闭按钮关闭“{name}”。',
     confirmClosePlaceholder: '输入 {keyword} 确认',
     cwd: '当前目录'
   },

@@ -121,6 +121,48 @@ const scrollTabs = (direction) => {
   el.scrollBy({ left: amount * direction, behavior: 'smooth' })
 }
 
+const CLOSE_CONFIRM_MODE_KEY = 'mps.close.confirmMode' // input | dblclick
+const LEGACY_CLOSE_CONFIRM_ENABLED_KEY = 'mps.close.confirmEnabled'
+
+const readBool = (key, fallback = true) => {
+  try {
+    const raw = String(localStorage.getItem(key) ?? '').trim().toLowerCase()
+    if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true
+    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false
+    return fallback
+  } catch (_) {
+    return fallback
+  }
+}
+
+const normalizeCloseConfirmMode = (value) => {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === 'dblclick' || raw === 'doubleclick' || raw === 'double') return 'dblclick'
+  return 'input'
+}
+
+const readCloseConfirmMode = () => {
+  try {
+    const raw = localStorage.getItem(CLOSE_CONFIRM_MODE_KEY)
+    if (raw != null) return normalizeCloseConfirmMode(raw)
+
+    const legacy = localStorage.getItem(LEGACY_CLOSE_CONFIRM_ENABLED_KEY)
+    if (legacy != null) {
+      const enabled = readBool(LEGACY_CLOSE_CONFIRM_ENABLED_KEY, true)
+      return enabled ? 'input' : 'dblclick'
+    }
+  } catch (_) {}
+
+  return 'input'
+}
+
+const closeConfirmMode = ref(readCloseConfirmMode())
+const isCloseModeInput = computed(() => closeConfirmMode.value === 'input')
+
+const refreshCloseConfirmMode = () => {
+  closeConfirmMode.value = readCloseConfirmMode()
+}
+
 const showClosePrompt = ref(false)
 const closePromptTab = ref(null)
 const closePromptInput = ref('')
@@ -128,9 +170,14 @@ const closeInputRef = ref(null)
 
 const closePromptMessage = computed(() => {
   if (!closePromptTab.value) return ''
-  return t('tabs.confirmClosePrompt', {
-    name: getDisplayTitle(closePromptTab.value),
-    keyword: 'close'
+  if (isCloseModeInput.value) {
+    return t('tabs.confirmClosePromptInput', {
+      name: getDisplayTitle(closePromptTab.value),
+      keyword: 'CLOSE'
+    })
+  }
+  return t('tabs.confirmClosePromptDblclick', {
+    name: getDisplayTitle(closePromptTab.value)
   })
 })
 
@@ -144,7 +191,9 @@ const openClosePrompt = (tab) => {
   closePromptTab.value = tab
   closePromptInput.value = ''
   showClosePrompt.value = true
-  nextTick(() => closeInputRef.value?.focus())
+  if (isCloseModeInput.value) {
+    nextTick(() => closeInputRef.value?.focus())
+  }
 }
 
 const dismissClosePrompt = () => {
@@ -154,7 +203,13 @@ const dismissClosePrompt = () => {
 }
 
 const confirmClosePrompt = () => {
-  if (!closePromptTab.value || !isCloseInputValid.value) return
+  if (!closePromptTab.value || !isCloseModeInput.value || !isCloseInputValid.value) return
+  emit('close', closePromptTab.value.id)
+  dismissClosePrompt()
+}
+
+const forceClosePrompt = () => {
+  if (!closePromptTab.value || isCloseModeInput.value) return
   emit('close', closePromptTab.value.id)
   dismissClosePrompt()
 }
@@ -166,6 +221,8 @@ onMounted(() => {
   resizeHandler = () => updateScrollState()
   el.addEventListener('scroll', scrollHandler, { passive: true })
   window.addEventListener('resize', resizeHandler)
+  refreshCloseConfirmMode()
+  window.addEventListener('mps:close-settings', refreshCloseConfirmMode)
   if (typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(() => updateScrollState())
     resizeObserver.observe(el)
@@ -181,6 +238,7 @@ onBeforeUnmount(() => {
   if (resizeHandler) {
     window.removeEventListener('resize', resizeHandler)
   }
+  window.removeEventListener('mps:close-settings', refreshCloseConfirmMode)
   if (resizeObserver) {
     resizeObserver.disconnect()
   }
@@ -264,10 +322,11 @@ watch(
         <div class="tab-close-header">{{ t('tabs.confirmCloseTitle') }}</div>
         <div class="tab-close-message">{{ closePromptMessage }}</div>
         <input
+          v-if="isCloseModeInput"
           ref="closeInputRef"
           v-model="closePromptInput"
           class="tab-close-input"
-          :placeholder="t('tabs.confirmClosePlaceholder', { keyword: 'close' })"
+          :placeholder="t('tabs.confirmClosePlaceholder', { keyword: 'CLOSE' })"
           @keydown.enter.prevent="confirmClosePrompt"
           @keydown.esc.prevent="dismissClosePrompt"
         />
@@ -276,10 +335,19 @@ watch(
             {{ t('common.cancel') }}
           </button>
           <button
+            v-if="isCloseModeInput"
             class="tab-close-btn tab-close-btn--danger"
             type="button"
             :disabled="!isCloseInputValid"
             @click="confirmClosePrompt"
+          >
+            {{ t('tabs.close') }}
+          </button>
+          <button
+            v-else
+            class="tab-close-btn tab-close-btn--danger"
+            type="button"
+            @dblclick.prevent="forceClosePrompt"
           >
             {{ t('tabs.close') }}
           </button>
@@ -612,6 +680,10 @@ watch(
 .tab-close-btn:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.tab-close-btn--inactive {
+  opacity: 0.55;
 }
 
 .close-btn {
