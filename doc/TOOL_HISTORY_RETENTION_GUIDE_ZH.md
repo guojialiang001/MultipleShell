@@ -44,6 +44,8 @@ MultipleShell 已使用 `app.getPath('userData')` 下的 per-template 目录落�
   codex-homes/<configId>/
     config.toml
     auth.json
+  codex-runtime/<configId>/
+    persist/history.jsonl
   opencode-homes/<configId>/
     opencode/.opencode.json
   opencode-runtime/<configId>/
@@ -159,6 +161,12 @@ MultipleShell 当前的典型做法是：**每次会话创建一个临时 `CODEX
 **如何确定白名单：**
 
 - 已知（本机可见）的关键文件：`history.jsonl`（位于 `CODEX_HOME/history.jsonl`），建议至少纳入白名单同步。
+
+**MultipleShell 默认实现（当前代码）：**
+
+- 默认白名单：`history.jsonl`。
+- 可用 `MPS_CODEX_PERSIST_WHITELIST=...` 覆盖白名单（逗号/分号分隔）。
+- 如需“从零开始”，设置 `MPS_CODEX_CLEAR_HISTORY=1`（会按白名单清理 `<userData>/codex-runtime/<configId>/persist/` 下的文件）。
 - 启用调试保留临时目录（一次即可），观察 Codex 实际写入了哪些文件，再决定同步哪些：
 
 ```text

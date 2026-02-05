@@ -37,8 +37,8 @@
   - 选择保护：大量输出时尽量避免干扰鼠标选区/鼠标抬起的选择结束。
   - `clear/cls` 等清屏行为做了额外兜底处理（前端检测 + 强制清屏）。
 - 安全存储（重要）：配置与草稿使用 Electron `safeStorage` 加密写入用户目录；系统不支持安全存储时应用会提示并退出。
-- Codex 额外隔离：每个会话使用独立临时 `CODEX_HOME`，避免 Codex 在运行时改写用户的模板源文件。
-- Claude Code 会话隔离：每个模板使用独立 `CLAUDE_CONFIG_DIR` + HOME/USERPROFILE；默认会清理模板 profile 下的 `history.jsonl`，避免自动续接旧会话（如需保留，设置 `MPS_CLAUDE_PRESERVE_HISTORY=1`）。
+- Codex 额外隔离 + 历史留存：每个会话使用独立临时 `CODEX_HOME`（避免模板漂移），并从 `<userData>/codex-runtime/<configId>/persist/` 同步运行态白名单文件（默认包含 `history.jsonl`）。
+- Claude Code 会话隔离 + 历史留存：每个模板使用独立 `CLAUDE_CONFIG_DIR` + HOME/USERPROFILE；默认保留模板 profile 下的 `history.jsonl`（如需清理，设置 `MPS_CLAUDE_CLEAR_HISTORY=1`）。
 - Windows 安装/卸载体验：NSIS 安装包自定义 “应用正在运行” 检测逻辑，避免不同权限/不同用户启动导致无法卸载/升级。
 
 ## 技术栈
@@ -235,6 +235,7 @@ node .\\scripts\\monitor-stresscheck.js
 - 启动会话时：
   - 模板源文件会镜像到：`<userData>/codex-homes/<configId>/`（用于长期保存模板内容）。
   - 运行时会为每个会话创建独立临时 `CODEX_HOME`（如 `%TEMP%\\mps-codex-home-<sessionId>`），并把 `config.toml/auth.json` 写入该临时目录，防止 Codex 自行写回导致模板漂移。
+  - 工具运行态/历史会按白名单在 `<userData>/codex-runtime/<configId>/persist/` 与临时 `CODEX_HOME` 之间同步（默认：`history.jsonl`）。
   - 同时会设置：`CODEX_HOME`、`CODEX_CONFIG_TOML(_PATH)`、`CODEX_AUTH_JSON(_PATH)` 等环境变量（并在启动时在终端里打印这些路径，方便排查）。
 
 ### 3) OpenCode（`opencode`）
@@ -242,6 +243,7 @@ node .\\scripts\\monitor-stresscheck.js
 - 你编辑的是一份 `.opencode.json`（JSON 文本）。
 - 启动会话时主进程会将其写入：`<userData>/opencode-homes/<configId>/opencode/.opencode.json`，并设置 `XDG_CONFIG_HOME=<userData>/opencode-homes/<configId>` 让上游 OpenCode 自动读取该配置。
 - 若未显式设置，MultipleShell 会注入 `data.directory=<userData>/opencode-runtime/<configId>`，把 OpenCode 会话历史落到 per-template 的稳定目录。
+- 注意：如果工作目录里存在本地 `./.opencode.json`，上游 OpenCode 会合并它，且可能覆盖这里的设置。
 - 该类型支持额外 `envVars`（会注入到会话环境变量里）。
 
 默认模板：
@@ -258,6 +260,7 @@ node .\\scripts\\monitor-stresscheck.js
   - 均使用 Electron `safeStorage` 加密（依赖系统密钥服务：Windows DPAPI / macOS Keychain / Linux libsecret）。
 - 额外文件：
   - `claude-homes/`、`codex-homes/`、`opencode-homes/` 用于落地模板文件（便于外部工具读取）。
+  - `codex-runtime/` 用于保存 Codex 的 per-template 运行态/历史（例如 `persist/history.jsonl`）。
   - Codex 会话会在临时目录创建 `mps-codex-home-*`，会话退出后自动清理（可用 `MPS_KEEP_CODEX_HOME=1` 禁止清理以便调试）。
   - 多实例 agent 握手 token：`%APPDATA%\\MultipleShell\\agent-token`（Host 启动时生成；Client 用于握手鉴权）。
   - Client 独立 profile：`%LOCALAPPDATA%\\MultipleShell\\clients\\<pid>`（每个 Client 独立；删除后会自动重建）。
@@ -280,9 +283,11 @@ node .\\scripts\\monitor-stresscheck.js
 - `MPS_UPDATE_DEV=1`：开发环境允许启用更新。
 - `MPS_REMOTEAPP_EXE_PATH`：RemoteApp 注册时强制指定 `MultipleShell.exe` 路径（开发/自定义安装路径排查用）。
 - `MPS_KEEP_CODEX_HOME=1`：不清理每个会话创建的临时 `CODEX_HOME`。
+- `MPS_CODEX_CLEAR_HISTORY=1`：在启动 Codex 会话前清空该模板的持久化历史/状态（按白名单）。
+- `MPS_CODEX_PERSIST_WHITELIST=...`：覆盖 Codex 的持久化白名单文件（用逗号/分号分隔；默认：`history.jsonl`）。
 - `MPS_DEBUG_ENV_APPLY=1`：调试 env 注入行为（会在终端输出提示）。
 - `MPS_SUPPRESS_DIALOGS=1`：抑制主进程弹窗（自检脚本使用）。
-- `MPS_CLAUDE_PRESERVE_HISTORY=1`：保留 Claude Code 在模板 profile 下的 `history.jsonl`（默认会清理，避免续接旧会话）。
+- `MPS_CLAUDE_CLEAR_HISTORY=1`：清理 Claude Code 在模板 profile 下的 `history.jsonl`（默认保留）。
 
 ## 常见问题
 

@@ -79,6 +79,8 @@ class ConfigManager {
       this.getClaudeHomesRoot(),
       this.getCodexHomesRoot(),
       this.getOpenCodeHomesRoot(),
+      path.join(app.getPath('userData'), 'codex-runtime'),
+      path.join(app.getPath('userData'), 'opencode-runtime'),
       app.getPath('userData')
     ]
     for (const root of roots) {
@@ -211,13 +213,37 @@ class ConfigManager {
     fs.writeFileSync(authPath, auth, 'utf8')
     this.setSecurePermissions(configPath, false)
     this.setSecurePermissions(authPath, false)
+
+    // Codex runtime state is synced (whitelist-based) into a stable per-template directory
+    // so tool history can be retained across MultipleShell restarts.
+    try {
+      const userData = app.getPath('userData')
+      const id = path.basename(codexHome)
+      const persistDir = path.join(userData, 'codex-runtime', id, 'persist')
+      fs.mkdirSync(persistDir, { recursive: true })
+      this.setSecurePermissions(path.dirname(persistDir), true)
+      this.setSecurePermissions(persistDir, true)
+    } catch (_) {
+      // ignore
+    }
   }
 
   deleteCodexHomeFiles(configId) {
     const codexHome = this.getCodexHomePath(configId)
-    if (!codexHome) return
+    if (codexHome) {
+      try {
+        fs.rmSync(codexHome, { recursive: true, force: true })
+      } catch (_) {
+        // ignore
+      }
+    }
+
+    // Clean up per-template runtime state as well.
     try {
-      fs.rmSync(codexHome, { recursive: true, force: true })
+      const id = typeof configId === 'string' ? configId.trim() : ''
+      if (!id) return
+      const runtimeDir = path.join(app.getPath('userData'), 'codex-runtime', id)
+      fs.rmSync(runtimeDir, { recursive: true, force: true })
     } catch (_) {
       // ignore
     }

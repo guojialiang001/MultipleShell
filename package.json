@@ -1,6 +1,6 @@
 {
   "name": "multiple-shell",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Multi-tab terminal manager for Windows PowerShell sessions (Electron + xterm.js). Launch Claude Code/Codex/OpenCode from templates, with optional Remote mode (Guacamole RemoteApp/VNC), voice input, auto-updates, and encrypted storage.",
   "keywords": [
     "terminal",

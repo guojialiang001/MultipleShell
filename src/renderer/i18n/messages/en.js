@@ -166,6 +166,8 @@ export default {
     codexConfigToml: 'Codex config.toml',
     codexAuthJson: 'Codex auth.json',
     opencodeConfigJson: 'OpenCode .opencode.json',
+    opencodeLocalOverrideHint:
+      'Note: if your working directory contains a local .opencode.json, upstream OpenCode will merge it and it can override these settings.',
     ccswitchImportedHint: 'Imported from CC Switch (overwrite-sync). It may be overwritten/removed on next overwrite import.',
     selectType: 'Select type...',
     cancel: 'Cancel',

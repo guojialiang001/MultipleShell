@@ -169,6 +169,8 @@ export default {
     codexConfigToml: 'Codex config.toml',
     codexAuthJson: 'Codex auth.json',
     opencodeConfigJson: 'OpenCode .opencode.json',
+    opencodeLocalOverrideHint:
+      '注意：如果工作目录里存在本地 .opencode.json，上游 OpenCode 会合并它，且可能覆盖这里的设置。',
     ccswitchImportedHint:
       '\u63d0\u793a\uff1a\u5f53\u524d\u914d\u7f6e\u6765\u81ea CC Switch \u8986\u76d6\u5bfc\u5165\uff0c\u4e0b\u6b21\u8986\u76d6\u5bfc\u5165\u65f6\u53ef\u80fd\u4f1a\u88ab\u66f4\u65b0\u6216\u5220\u9664\u3002',
     selectType: '选择类型...',

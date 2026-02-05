@@ -13,6 +13,16 @@ const OPENCODE_CONFIG_TEMPLATE = '{\n  \n}\n'
 const OPENCODE_PERMISSION_TEMPLATE = { edit: 'ask', bash: 'ask', webfetch: 'allow' }
 const PROMPT_MARKER = '__MPS_PROMPT__'
 
+const sleepSync = (ms) => {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, n)
+  } catch (_) {
+    // ignore
+  }
+}
+
 const clonePlain = (value) => {
   try {
     return structuredClone(value)
@@ -325,6 +335,259 @@ class PTYManager {
     this.codexTempHomes = new Map()
   }
 
+  getCodexPersistDir(configId) {
+    const id = typeof configId === 'string' ? configId.trim() : ''
+    if (!id) return null
+    return path.join(app.getPath('userData'), 'codex-runtime', id, 'persist')
+  }
+
+  getCodexPersistWhitelist() {
+    const defaults = ['history.jsonl']
+    const raw = String(process.env.MPS_CODEX_PERSIST_WHITELIST || '').trim()
+    if (!raw) return defaults
+
+    const out = []
+    for (const chunk of raw.split(/[;,]/g)) {
+      const trimmed = String(chunk || '').trim()
+      if (!trimmed) continue
+      if (path.isAbsolute(trimmed)) continue
+
+      const normalized = trimmed.replace(/\\/g, '/')
+      const parts = normalized.split('/').filter(Boolean)
+      if (parts.length === 0) continue
+      if (parts.some((p) => p === '.' || p === '..')) continue
+      if (!parts.every((p) => /^[A-Za-z0-9_.-]+$/.test(p))) continue
+      const baseName = parts[parts.length - 1].toLowerCase()
+      if (baseName === 'config.toml' || baseName === 'auth.json') continue
+
+      out.push(parts.join(path.sep))
+    }
+
+    return out.length > 0 ? Array.from(new Set(out)) : defaults
+  }
+
+  acquireCodexPersistLock(persistDir) {
+    const dir = String(persistDir || '').trim()
+    if (!dir) return null
+
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+    } catch (_) {
+      return null
+    }
+
+    const lockPath = path.join(dir, '.mps-codex-sync.lock')
+    const timeoutMs = Number(process.env.MPS_CODEX_PERSIST_LOCK_TIMEOUT_MS || 5000)
+    const staleMs = Number(process.env.MPS_CODEX_PERSIST_LOCK_STALE_MS || 120000)
+    const started = Date.now()
+
+    while (true) {
+      try {
+        const fd = fs.openSync(lockPath, 'wx')
+        try {
+          fs.writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`, 'utf8')
+        } catch (_) {}
+        return { lockPath, fd }
+      } catch (err) {
+        if (!err || err.code !== 'EEXIST') return null
+
+        let isStale = false
+        try {
+          const stat = fs.statSync(lockPath)
+          if (Number.isFinite(staleMs) && staleMs > 0) {
+            isStale = Date.now() - stat.mtimeMs > staleMs
+          }
+        } catch (_) {}
+
+        if (isStale) {
+          try {
+            fs.rmSync(lockPath, { force: true })
+          } catch (_) {}
+          continue
+        }
+
+        if (Number.isFinite(timeoutMs) && timeoutMs > 0 && Date.now() - started > timeoutMs) {
+          return null
+        }
+
+        sleepSync(50)
+      }
+    }
+  }
+
+  releaseCodexPersistLock(lock) {
+    if (!lock) return
+    try {
+      if (typeof lock.fd === 'number') fs.closeSync(lock.fd)
+    } catch (_) {}
+    try {
+      fs.rmSync(lock.lockPath, { force: true })
+    } catch (_) {}
+  }
+
+  restoreCodexPersistedFiles(configId, codexHome) {
+    const persistDir = this.getCodexPersistDir(configId)
+    if (!persistDir) return { persistDir: null, baselines: {}, whitelist: [] }
+
+    const whitelist = this.getCodexPersistWhitelist()
+    const baselines = {}
+
+    const lock = this.acquireCodexPersistLock(persistDir)
+    try {
+      if (process.env.MPS_CODEX_CLEAR_HISTORY === '1') {
+        for (const rel of whitelist) {
+          try {
+            fs.rmSync(path.join(persistDir, rel), { force: true })
+          } catch (_) {}
+        }
+      }
+
+      for (const rel of whitelist) {
+        const src = path.join(persistDir, rel)
+        if (!fs.existsSync(src)) {
+          baselines[rel] = 0
+          continue
+        }
+
+        const dest = path.join(codexHome, rel)
+        try {
+          fs.mkdirSync(path.dirname(dest), { recursive: true })
+        } catch (_) {}
+
+        try {
+          fs.copyFileSync(src, dest)
+        } catch (_) {}
+
+        try {
+          baselines[rel] = fs.statSync(src).size
+        } catch (_) {
+          baselines[rel] = 0
+        }
+      }
+    } finally {
+      this.releaseCodexPersistLock(lock)
+    }
+
+    return { persistDir, baselines, whitelist }
+  }
+
+  readFileSliceSync(filePath, start) {
+    const safeStart = Math.max(0, Number(start) || 0)
+    const stat = fs.statSync(filePath)
+    const size = Number(stat?.size || 0)
+    if (size <= safeStart) return Buffer.alloc(0)
+
+    const len = size - safeStart
+    const fd = fs.openSync(filePath, 'r')
+    try {
+      const buf = Buffer.allocUnsafe(len)
+      const bytes = fs.readSync(fd, buf, 0, len, safeStart)
+      return bytes === len ? buf : buf.subarray(0, Math.max(0, bytes))
+    } finally {
+      try {
+        fs.closeSync(fd)
+      } catch (_) {}
+    }
+  }
+
+  appendBufferWithNewline(destPath, buf) {
+    if (!buf || buf.length === 0) return
+
+    let needsNewline = false
+    try {
+      const stat = fs.statSync(destPath)
+      const size = Number(stat?.size || 0)
+      if (size > 0) {
+        const fd = fs.openSync(destPath, 'r')
+        try {
+          const last = Buffer.alloc(1)
+          fs.readSync(fd, last, 0, 1, size - 1)
+          const lastByte = last[0]
+          const firstByte = buf[0]
+          const endsNl = lastByte === 0x0a || lastByte === 0x0d
+          const startsNl = firstByte === 0x0a || firstByte === 0x0d
+          needsNewline = !endsNl && !startsNl
+        } finally {
+          try {
+            fs.closeSync(fd)
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      if (needsNewline) fs.appendFileSync(destPath, '\n')
+    } catch (_) {}
+
+    try {
+      fs.appendFileSync(destPath, buf)
+    } catch (_) {}
+  }
+
+  persistCodexTempFiles(sessionInfo) {
+    if (!sessionInfo || typeof sessionInfo !== 'object') return
+
+    const home = typeof sessionInfo.home === 'string' ? sessionInfo.home : ''
+    const configId = typeof sessionInfo.configId === 'string' ? sessionInfo.configId : ''
+    const persistDir = typeof sessionInfo.persistDir === 'string' ? sessionInfo.persistDir : ''
+    const baselines = sessionInfo.baselines && typeof sessionInfo.baselines === 'object' ? sessionInfo.baselines : {}
+    const whitelist = Array.isArray(sessionInfo.whitelist) ? sessionInfo.whitelist : this.getCodexPersistWhitelist()
+
+    if (!home || !persistDir || !configId) return
+
+    const lock = this.acquireCodexPersistLock(persistDir)
+    try {
+      for (const rel of whitelist) {
+        const src = path.join(home, rel)
+        if (!fs.existsSync(src)) continue
+
+        const dest = path.join(persistDir, rel)
+        try {
+          fs.mkdirSync(path.dirname(dest), { recursive: true })
+        } catch (_) {}
+
+        if (!fs.existsSync(dest)) {
+          try {
+            fs.copyFileSync(src, dest)
+          } catch (_) {}
+          continue
+        }
+
+        let baseSize = 0
+        if (typeof baselines?.[rel] === 'number') baseSize = baselines[rel]
+
+        let srcSize = 0
+        try {
+          srcSize = fs.statSync(src).size
+        } catch (_) {
+          srcSize = 0
+        }
+
+        let start = 0
+        if (baseSize > 0 && srcSize >= baseSize) {
+          start = baseSize
+        } else if (baseSize > 0 && srcSize < baseSize) {
+          // Codex rewrote/truncated the file; fall back to appending the whole file.
+          start = 0
+        }
+
+        let chunk = Buffer.alloc(0)
+        try {
+          chunk = this.readFileSliceSync(src, start)
+        } catch (_) {
+          chunk = Buffer.alloc(0)
+        }
+
+        if (chunk.length === 0) continue
+        this.appendBufferWithNewline(dest, chunk)
+      }
+    } finally {
+      this.releaseCodexPersistLock(lock)
+    }
+  }
+
   normalizeEnvObject(obj) {
     const out = {}
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out
@@ -374,6 +637,7 @@ class PTYManager {
     const type = typeof config?.type === 'string' ? config.type : ''
     if (type !== 'codex') return null
 
+    const configId = typeof config?.id === 'string' ? config.id.trim() : ''
     const configToml = typeof config?.codexConfigToml === 'string' ? config.codexConfigToml : ''
     const authJson = typeof config?.codexAuthJson === 'string' ? config.codexAuthJson : ''
 
@@ -390,13 +654,26 @@ class PTYManager {
     }
 
     try {
+      let restored = { persistDir: null, whitelist: [], baselines: {} }
+      try {
+        restored = this.restoreCodexPersistedFiles(configId, codexHome)
+      } catch (_) {
+        restored = { persistDir: null, whitelist: [], baselines: {} }
+      }
+
       if (configToml.trim()) {
         fs.writeFileSync(path.join(codexHome, 'config.toml'), configToml, 'utf8')
       }
       if (authJson.trim()) {
         fs.writeFileSync(path.join(codexHome, 'auth.json'), authJson, 'utf8')
       }
-      this.codexTempHomes.set(sessionId, codexHome)
+      this.codexTempHomes.set(sessionId, {
+        home: codexHome,
+        configId,
+        persistDir: restored.persistDir,
+        whitelist: restored.whitelist,
+        baselines: restored.baselines
+      })
       return codexHome
     } catch (_) {
       try {
@@ -407,9 +684,19 @@ class PTYManager {
   }
 
   cleanupCodexHome(sessionId) {
-    const home = this.codexTempHomes.get(sessionId)
-    if (!home) return
+    const info = this.codexTempHomes.get(sessionId)
+    if (!info) return
     this.codexTempHomes.delete(sessionId)
+
+    try {
+      this.persistCodexTempFiles(info)
+    } catch (err) {
+      console.warn('[PTYManager] Failed to persist Codex runtime state:', err)
+    }
+
+    const home = typeof info === 'string' ? info : String(info.home || '')
+    if (!home) return
+
     if (process.env.MPS_KEEP_CODEX_HOME === '1') return
     try {
       if (fs.existsSync(home)) {
@@ -435,48 +722,50 @@ class PTYManager {
     }
   }
 
-	  syncClaudeProfileFiles(config) {
-	    const type = typeof config?.type === 'string' ? config.type : ''
-	    if (type !== 'claude-code') return null
-	    const id = typeof config?.id === 'string' ? config.id.trim() : ''
-	    if (!id) return null
+  syncClaudeProfileFiles(config) {
+    const type = typeof config?.type === 'string' ? config.type : ''
+    if (type !== 'claude-code') return null
+    const id = typeof config?.id === 'string' ? config.id.trim() : ''
+    if (!id) return null
 
-	    const settingsJson = typeof config?.claudeSettingsJson === 'string' ? config.claudeSettingsJson : ''
-	    const payload = settingsJson.trim() ? settingsJson : '{}'
+    const settingsJson = typeof config?.claudeSettingsJson === 'string' ? config.claudeSettingsJson : ''
+    const payload = settingsJson.trim() ? settingsJson : '{}'
 
-	    const profileHome = path.join(app.getPath('userData'), 'claude-homes', id)
-	    try {
-	      fs.mkdirSync(profileHome, { recursive: true })
-	      fs.writeFileSync(path.join(profileHome, 'settings.json'), payload, 'utf8')
+    const profileHome = path.join(app.getPath('userData'), 'claude-homes', id)
+    try {
+      fs.mkdirSync(profileHome, { recursive: true })
+      fs.writeFileSync(path.join(profileHome, 'settings.json'), payload, 'utf8')
 
-	      // Keep Claude Code sessions pinned to C:\Users\<name>\.claude.json on Windows.
-	      // Always copy .claude.json into the per-template profile dir. We intentionally do NOT
-	      // hardlink/symlink because Claude Code can write to this file and we must avoid config bleed.
-	      const windowsHome = process.platform === 'win32' ? resolveWindowsUserHomeOnC() : ''
-	      if (windowsHome) {
-	        installClaudeJsonIntoProfile(profileHome, windowsHome)
-	      }
+      // Keep Claude Code sessions pinned to C:\Users\<name>\.claude.json on Windows.
+      // Always copy .claude.json into the per-template profile dir. We intentionally do NOT
+      // hardlink/symlink because Claude Code can write to this file and we must avoid config bleed.
+      const windowsHome = process.platform === 'win32' ? resolveWindowsUserHomeOnC() : ''
+      if (windowsHome) {
+        installClaudeJsonIntoProfile(profileHome, windowsHome)
+      }
 
-	      // Prevent old Claude Code sessions from being resumed via persisted history.
-	      // Default: clear; opt-out by setting MPS_CLAUDE_PRESERVE_HISTORY=1.
-	      if (process.env.MPS_CLAUDE_PRESERVE_HISTORY !== '1') {
-	        const candidates = [
-	          path.join(profileHome, 'history.jsonl'),
-	          path.join(profileHome, '.claude', 'history.jsonl')
-	        ]
-	        for (const candidate of candidates) {
-	          try {
-	            fs.rmSync(candidate, { force: true })
-	          } catch (_) {
-	            // ignore
-	          }
-	        }
-	      }
-	      return profileHome
-	    } catch (_) {
-	      return null
-	    }
-	  }
+      // History retention:
+      // Default: preserve `history.jsonl` in the per-template profile so Claude Code can resume.
+      // Opt-in clear: set MPS_CLAUDE_CLEAR_HISTORY=1.
+      if (process.env.MPS_CLAUDE_CLEAR_HISTORY === '1') {
+        const candidates = [
+          path.join(profileHome, 'history.jsonl'),
+          path.join(profileHome, '.claude', 'history.jsonl')
+        ]
+        for (const candidate of candidates) {
+          try {
+            fs.rmSync(candidate, { force: true })
+          } catch (_) {
+            // ignore
+          }
+        }
+      }
+
+      return profileHome
+    } catch (_) {
+      return null
+    }
+  }
 
   syncCodexProfileFiles(config) {
     const type = typeof config?.type === 'string' ? config.type : ''

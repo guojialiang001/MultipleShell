@@ -535,6 +535,7 @@ const save = () => {
               rows="10"
               class="code-input"
             ></textarea>
+            <div class="form-hint">{{ t('configEditor.opencodeLocalOverrideHint') }}</div>
           </div>
 
           <div v-if="isClaudeCode" class="form-group">
@@ -791,6 +792,13 @@ h3 {
   margin-bottom: 16px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.form-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .form-group {
