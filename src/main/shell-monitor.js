@@ -3,6 +3,7 @@ const { RULES_BY_TYPE, ERROR_PATTERNS, ERROR_EXCLUDE_PATTERNS } = require('./she
 
 const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g
 const PROMPT_MARKER = '__MPS_PROMPT__'
+const CWD_MARKER = '__MPS_CWD__'
 
 const stripAnsi = (value) => String(value || '').replace(ANSI_RE, '')
 
@@ -24,7 +25,8 @@ class ShellMonitor extends EventEmitter {
   isInternalMarkerLine(line) {
     const value = String(line || '').trim()
     if (!value) return false
-    return value.toUpperCase().startsWith(PROMPT_MARKER)
+    const upper = value.toUpperCase()
+    return upper.startsWith(PROMPT_MARKER) || upper.startsWith(CWD_MARKER)
   }
 
   truncateLine(line) {
@@ -99,6 +101,39 @@ class ShellMonitor extends EventEmitter {
     if (state.status !== 'starting') state.status = 'running'
     state._dirty = true
     this.queueNotify(sessionId)
+  }
+
+  extractCwdFromPromptLines(lines) {
+    if (!Array.isArray(lines) || lines.length === 0) return null
+
+    for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
+      const raw = String(lines[idx] || '').trimEnd()
+      if (!raw) continue
+      if (this.isInternalMarkerLine(raw)) continue
+
+      const cwdMarker = raw.match(/^__MPS_CWD__\s*(.+)\s*$/i)
+      if (cwdMarker) {
+        const value = String(cwdMarker[1] || '').trim()
+        if (value) return value
+      }
+
+      const psPrompt = raw.match(/^(?:\[[^\]]+\]:\s*)?PS\s+([^>\r\n]+)>\s*$/i)
+      if (!psPrompt) continue
+
+      let value = String(psPrompt[1] || '').trim()
+      if (!value) continue
+
+      // Common provider-qualified form: Microsoft.PowerShell.Core\FileSystem::C:\...
+      const qualifierIdx = value.lastIndexOf('::')
+      if (qualifierIdx !== -1) {
+        const candidate = value.slice(qualifierIdx + 2)
+        if (/^[A-Za-z]:[\\/]/.test(candidate)) value = candidate
+      }
+
+      return value
+    }
+
+    return null
   }
 
   normalizeLines(state, data) {
@@ -200,6 +235,13 @@ class ShellMonitor extends EventEmitter {
       state.status = state.completionDetected ? 'completed' : 'idle'
     }
 
+    if (promptHit) {
+      const nextCwd = this.extractCwdFromPromptLines(matchLines)
+      if (typeof nextCwd === 'string' && nextCwd.trim() && nextCwd !== state.cwd) {
+        state.cwd = nextCwd
+      }
+    }
+
     state._dirty = true
     this.queueNotify(sessionId)
   }
@@ -247,6 +289,7 @@ class ShellMonitor extends EventEmitter {
       status: state.status,
       startTime: state.startTime,
       endTime: state.endTime,
+      cwd: typeof state.cwd === 'string' ? state.cwd : '',
       lastActivityTime: state.lastActivityTime,
       outputLineCount: state.outputLineCount,
       errorCount: state.errorCount,

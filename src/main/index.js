@@ -332,6 +332,20 @@ shellMonitor.on('update', (payload) => {
   if (agent && agent.role === 'host') {
     agent.broadcast('monitor.update', payload)
   }
+
+  // Keep session list cwd in sync so the TabBar path reflects runtime `cd` changes.
+  try {
+    const sid = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+    const cwd = typeof payload?.state?.cwd === 'string' ? payload.state.cwd.trim() : ''
+    if (!sid || !cwd) return
+
+    const entry = sessionRegistry.get(sid)
+    if (!entry || typeof entry !== 'object') return
+    const prev = typeof entry.workingDir === 'string' ? entry.workingDir : ''
+    if (prev === cwd) return
+    entry.workingDir = cwd
+    broadcastSessionsChanged()
+  } catch (_) {}
 })
 
 // Phase 4: elect Host/Client role before app.whenReady() so a Client can switch its Chromium

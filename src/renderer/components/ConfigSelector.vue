@@ -534,6 +534,23 @@ onBeforeUnmount(() => {
 
     <div class="content-body">
       <div class="config-list-container">
+        <div v-if="mode === 'create'" class="folder-selector">
+          <label class="section-label">{{ t('configSelector.workingDirectory') }}</label>
+          <div class="folder-input-group">
+            <div class="input-wrapper">
+              <input
+                v-model="customWorkingDir"
+                type="text"
+                :placeholder="t('configSelector.defaultCwd', { default: t('configSelector.userProfile') })"
+                readonly
+              />
+            </div>
+            <button @click="selectFolder" class="btn-secondary" :disabled="isSelectingFolder">
+              {{ t('configSelector.browse') }}
+            </button>
+          </div>
+        </div>
+
         <div class="type-tabs">
           <button
             v-for="tab in typeTabs"
@@ -662,18 +679,6 @@ onBeforeUnmount(() => {
         </div>
         <div v-else class="empty-hint">
           {{ t('configSelector.emptyList') }}
-        </div>
-      </div>
-
-      <div v-if="mode === 'create'" class="folder-selector">
-        <label class="section-label">{{ t('configSelector.workingDirectory') }}</label>
-        <div class="folder-input-group">
-          <div class="input-wrapper">
-             <input v-model="customWorkingDir" type="text" :placeholder="t('configSelector.defaultCwd', { default: t('configSelector.userProfile') })" readonly />
-          </div>
-          <button @click="selectFolder" class="btn-secondary" :disabled="isSelectingFolder">
-            {{ t('configSelector.browse') }}
-          </button>
         </div>
       </div>
     </div>
