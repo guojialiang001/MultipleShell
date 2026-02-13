@@ -4,6 +4,21 @@ const { app, safeStorage, dialog } = require('electron')
 const { v4: uuidv4 } = require('uuid')
 
 const VALID_TYPES = new Set(['claude-code', 'codex', 'opencode'])
+const VALID_PROXY_IMPLEMENTATIONS = new Set(['off', 'app', 'ccswitch'])
+const VALID_PROXY_QUEUE_MODES = new Set(['failover-queue', 'all-providers', 'custom'])
+
+const normalizeStringArray = (value) => {
+  if (!Array.isArray(value)) return []
+  const out = []
+  const seen = new Set()
+  for (const item of value) {
+    const id = String(item || '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
 
 class ConfigManager {
   constructor() {
@@ -502,6 +517,32 @@ class ConfigManager {
 
     const useCCSwitch = Boolean(config?.useCCSwitch)
     const useCCSwitchProxy = Boolean(config?.useCCSwitchProxy)
+    const proxyEnabled =
+      config?.proxyEnabled == null ? useCCSwitchProxy : Boolean(config?.proxyEnabled)
+    const proxyImplementationRaw = String(config?.proxyImplementation || '').trim().toLowerCase()
+    const proxyImplementation =
+      VALID_PROXY_IMPLEMENTATIONS.has(proxyImplementationRaw)
+        ? proxyImplementationRaw
+        : (useCCSwitchProxy ? 'ccswitch' : 'app')
+    const respectCCSwitchProxyConfig =
+      config?.respectCCSwitchProxyConfig === false ? false : true
+    const proxyQueueModeRaw = String(config?.proxyQueueMode || '').trim().toLowerCase()
+    const proxyQueueMode =
+      VALID_PROXY_QUEUE_MODES.has(proxyQueueModeRaw) ? proxyQueueModeRaw : 'failover-queue'
+    const proxyAllowProviderIds = normalizeStringArray(config?.proxyAllowProviderIds)
+    const proxyDenyProviderIds = normalizeStringArray(config?.proxyDenyProviderIds)
+    const appFailoverEnabled =
+      config?.appFailoverEnabled == null ? null : Boolean(config?.appFailoverEnabled)
+    const appBreakerEnabled =
+      config?.appBreakerEnabled == null ? null : Boolean(config?.appBreakerEnabled)
+    const breakerConfig =
+      config?.breakerConfig && typeof config.breakerConfig === 'object' && !Array.isArray(config.breakerConfig)
+        ? { ...config.breakerConfig }
+        : {}
+    const retryConfig =
+      config?.retryConfig && typeof config.retryConfig === 'object' && !Array.isArray(config.retryConfig)
+        ? { ...config.retryConfig }
+        : {}
     const ccSwitchProviderId =
       typeof config?.ccSwitchProviderId === 'string' ? config.ccSwitchProviderId : ''
 
@@ -526,8 +567,18 @@ class ConfigManager {
       // Working directory is not persisted in templates; it's chosen only when creating a new tab.
       workingDirectory: '',
       envVars,
-      useCCSwitch: useCCSwitch || useCCSwitchProxy,
+      useCCSwitch: useCCSwitch || useCCSwitchProxy || proxyEnabled,
       useCCSwitchProxy,
+      proxyEnabled,
+      proxyImplementation,
+      respectCCSwitchProxyConfig,
+      proxyQueueMode,
+      proxyAllowProviderIds,
+      proxyDenyProviderIds,
+      appFailoverEnabled,
+      appBreakerEnabled,
+      breakerConfig,
+      retryConfig,
       ccSwitchProviderId,
       importSource,
       claudeSettingsJson: typeof claudeSettingsJson === 'string' ? claudeSettingsJson : '',
@@ -575,10 +626,26 @@ class ConfigManager {
 
   createDefaultConfigs() {
     const now = new Date().toISOString()
+    const makeProxyDefaults = () => ({
+      useCCSwitch: false,
+      useCCSwitchProxy: false,
+      proxyEnabled: false,
+      proxyImplementation: 'app',
+      respectCCSwitchProxyConfig: true,
+      proxyQueueMode: 'failover-queue',
+      proxyAllowProviderIds: [],
+      proxyDenyProviderIds: [],
+      appFailoverEnabled: null,
+      appBreakerEnabled: null,
+      breakerConfig: {},
+      retryConfig: {},
+      ccSwitchProviderId: '',
+      importSource: ''
+    })
     return [
-      { id: uuidv4(), type: 'claude-code', name: 'Claude Code', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', importSource: '', claudeSettingsJson: this.getClaudeSettingsTemplate(), codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
-      { id: uuidv4(), type: 'codex', name: 'Codex', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', importSource: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
-      { id: uuidv4(), type: 'opencode', name: 'OpenCode', workingDirectory: '', envVars: {}, useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '', importSource: '', claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: this.getOpenCodeConfigTemplate(), createdAt: now, updatedAt: now }
+      { id: uuidv4(), type: 'claude-code', name: 'Claude Code', workingDirectory: '', envVars: {}, ...makeProxyDefaults(), claudeSettingsJson: this.getClaudeSettingsTemplate(), codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
+      { id: uuidv4(), type: 'codex', name: 'Codex', workingDirectory: '', envVars: {}, ...makeProxyDefaults(), claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: '', createdAt: now, updatedAt: now },
+      { id: uuidv4(), type: 'opencode', name: 'OpenCode', workingDirectory: '', envVars: {}, ...makeProxyDefaults(), claudeSettingsJson: '', codexConfigToml: '', codexAuthJson: '', opencodeConfigJson: this.getOpenCodeConfigTemplate(), createdAt: now, updatedAt: now }
     ]
   }
 

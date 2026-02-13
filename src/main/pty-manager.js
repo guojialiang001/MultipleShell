@@ -6,6 +6,8 @@ const os = require('os')
 const path = require('path')
 const shellMonitor = require('./shell-monitor')
 const ccSwitch = require('./ccswitch')
+const AppProxyServer = require('./app-proxy-server')
+const { mergeEffectiveProxyPolicy, resolveAppKeyFromType } = require('./ccswitch-policy')
 
 // Upstream OpenCode reads `.opencode.json` from `$XDG_CONFIG_HOME/opencode/.opencode.json` (and other default paths).
 // Keep this template minimal; MultipleShell injects a per-template `data.directory` when materializing.
@@ -150,6 +152,197 @@ const makeCodexProxyToml = (baseUrl) => {
     'wire_api = "responses"\n' +
     'requires_openai_auth = true\n'
   )
+}
+
+const firstNonEmptyString = (...values) => {
+  for (const value of values) {
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (trimmed) return trimmed
+  }
+  return ''
+}
+
+const parseTomlScalar = (toml, key) => {
+  const raw = String(toml || '')
+  if (!raw) return ''
+  const escapedKey = String(key || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`^\\s*${escapedKey}\\s*=\\s*"([^"]+)"\\s*$`, 'gmi')
+  const m = re.exec(raw)
+  return m ? String(m[1] || '').trim() : ''
+}
+
+const parseTomlEnvHeaderMappings = (toml) => {
+  const out = []
+  const raw = String(toml || '')
+  if (!raw) return out
+
+  for (const m of raw.matchAll(/env_http_headers\s*=\s*\{([^}]*)\}/gmi)) {
+    const body = m[1] || ''
+    for (const kv of body.matchAll(/"([^"]+)"\s*=\s*"([^"]+)"/g)) {
+      const headerName = String(kv[1] || '').trim()
+      const envName = String(kv[2] || '').trim()
+      if (!headerName || !envName) continue
+      out.push({ headerName, envName })
+    }
+  }
+  return out
+}
+
+const resolveEnvValue = (auth, envName) => {
+  const name = String(envName || '').trim()
+  if (!name) return ''
+  if (auth && typeof auth === 'object' && !Array.isArray(auth) && typeof auth[name] === 'string') {
+    const v = auth[name].trim()
+    if (v) return v
+  }
+  const fromEnv = String(process.env[name] || '').trim()
+  return fromEnv || ''
+}
+
+const addHeader = (headers, name, value) => {
+  const key = String(name || '').trim().toLowerCase()
+  const val = String(value || '').trim()
+  if (!key || !val) return
+  headers[key] = val
+}
+
+const normalizeUrl = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  try {
+    const url = new URL(raw)
+    return url.toString().replace(/\/+$/, '')
+  } catch (_) {
+    return ''
+  }
+}
+
+const extractOpenAIUpstream = (provider) => {
+  if (!provider || typeof provider !== 'object') return null
+
+  const settings = ensureObject(provider.settingsConfig)
+  const auth = ensureObject(settings.auth)
+  const toml = typeof settings.config === 'string' ? settings.config : ''
+
+  const baseUrl = firstNonEmptyString(
+    parseTomlScalar(toml, 'base_url'),
+    settings.base_url,
+    settings.baseUrl,
+    settings.baseURL,
+    provider?.endpoints?.[0]?.baseUrl,
+    provider?.endpoints?.[0]?.base_url,
+    provider?.endpoints?.[0]?.url
+  )
+  const upstreamBaseUrl = normalizeUrl(baseUrl)
+  if (!upstreamBaseUrl) return null
+
+  const upstreamHeaders = {}
+  const bearerVar = parseTomlScalar(toml, 'bearer_token_env_var')
+  const envKeyVar = parseTomlScalar(toml, 'env_key')
+  const bearerToken = resolveEnvValue(auth, bearerVar)
+  const envKeyToken = resolveEnvValue(auth, envKeyVar)
+
+  if (bearerToken) addHeader(upstreamHeaders, 'authorization', `Bearer ${bearerToken}`)
+
+  for (const mapping of parseTomlEnvHeaderMappings(toml)) {
+    const value = resolveEnvValue(auth, mapping.envName)
+    if (!value) continue
+    addHeader(upstreamHeaders, mapping.headerName, value)
+  }
+
+  if (!upstreamHeaders.authorization) {
+    const openaiApiKey = firstNonEmptyString(
+      auth.OPENAI_API_KEY,
+      auth.openai_api_key,
+      auth.api_key,
+      envKeyToken
+    )
+    if (openaiApiKey) addHeader(upstreamHeaders, 'authorization', `Bearer ${openaiApiKey}`)
+  }
+
+  return {
+    id: String(provider.id || '').trim(),
+    upstreamBaseUrl,
+    upstreamHeaders
+  }
+}
+
+const extractAnthropicUpstream = (provider) => {
+  if (!provider || typeof provider !== 'object') return null
+  const settings = ensureObject(provider.settingsConfig)
+  const env = ensureObject(settings.env)
+
+  const upstreamBaseUrl = normalizeUrl(
+    firstNonEmptyString(
+      env.ANTHROPIC_BASE_URL,
+      settings.ANTHROPIC_BASE_URL
+    )
+  )
+  if (!upstreamBaseUrl) return null
+
+  const token = firstNonEmptyString(
+    env.ANTHROPIC_AUTH_TOKEN,
+    settings.ANTHROPIC_AUTH_TOKEN,
+    env.ANTHROPIC_API_KEY,
+    settings.ANTHROPIC_API_KEY
+  )
+
+  const upstreamHeaders = {}
+  if (token) addHeader(upstreamHeaders, 'x-api-key', token)
+
+  const anthropicVersion = firstNonEmptyString(
+    env.ANTHROPIC_VERSION,
+    settings.ANTHROPIC_VERSION
+  )
+  if (anthropicVersion) addHeader(upstreamHeaders, 'anthropic-version', anthropicVersion)
+
+  return {
+    id: String(provider.id || '').trim(),
+    upstreamBaseUrl,
+    upstreamHeaders
+  }
+}
+
+const extractOpenCodeUpstream = (provider) => {
+  if (!provider || typeof provider !== 'object') return null
+
+  const fragment = extractOpenCodeProviderFragment(provider.settingsConfig, provider.id)
+  const options = ensureObject(fragment?.options)
+
+  const baseUrl = firstNonEmptyString(
+    options.baseURL,
+    options.baseUrl,
+    fragment?.baseURL,
+    fragment?.baseUrl
+  )
+
+  const upstreamBaseUrl = normalizeUrl(baseUrl)
+  if (!upstreamBaseUrl) return null
+
+  const upstreamHeaders = {}
+  const headersObj = ensureObject(options.headers)
+  for (const [name, value] of Object.entries(headersObj)) {
+    if (typeof value !== 'string') continue
+    addHeader(upstreamHeaders, name, value)
+  }
+
+  const apiKey = firstNonEmptyString(options.apiKey, options.api_key)
+  if (apiKey && !upstreamHeaders.authorization && !upstreamHeaders['x-api-key']) {
+    addHeader(upstreamHeaders, 'authorization', `Bearer ${apiKey}`)
+  }
+
+  return {
+    id: String(provider.id || '').trim(),
+    upstreamBaseUrl,
+    upstreamHeaders
+  }
+}
+
+const extractProviderUpstream = (appKey, provider) => {
+  if (appKey === 'claude') return extractAnthropicUpstream(provider)
+  if (appKey === 'opencode') return extractOpenCodeUpstream(provider) || extractOpenAIUpstream(provider)
+  return extractOpenAIUpstream(provider)
 }
 
 const extractOpenCodeProviderFragment = (settingsConfig, providerId) => {
@@ -333,6 +526,42 @@ class PTYManager {
   constructor() {
     this.sessions = new Map()
     this.codexTempHomes = new Map()
+    this.appProxyServer = new AppProxyServer()
+  }
+
+  async ensureAppProxyOrigin() {
+    try {
+      return await this.appProxyServer.ensureStarted()
+    } catch (err) {
+      console.warn('[PTYManager] Failed to start app-level proxy:', err)
+      return null
+    }
+  }
+
+  buildAppProxyProviders(appKey, providers, orderedProviderIds) {
+    const providerMap = new Map()
+    for (const provider of Array.isArray(providers) ? providers : []) {
+      if (!provider || typeof provider !== 'object' || Array.isArray(provider)) continue
+      const id = String(provider.id || '').trim()
+      if (!id) continue
+      providerMap.set(id, provider)
+    }
+
+    const out = []
+    for (const id of Array.isArray(orderedProviderIds) ? orderedProviderIds : []) {
+      const providerId = String(id || '').trim()
+      if (!providerId) continue
+      const provider = providerMap.get(providerId)
+      if (!provider) continue
+      const upstream = extractProviderUpstream(appKey, provider)
+      if (!upstream || !upstream.upstreamBaseUrl) continue
+      out.push({
+        id: providerId,
+        upstreamBaseUrl: upstream.upstreamBaseUrl,
+        upstreamHeaders: upstream.upstreamHeaders || {}
+      })
+    }
+    return out
   }
 
   getCodexPersistDir(configId) {
@@ -906,10 +1135,11 @@ class PTYManager {
     return out
   }
 
-  async resolveCCSwitchRuntimeConfig(config) {
+  async resolveCCSwitchRuntimeConfig(config, options = {}) {
     const base = config && typeof config === 'object' ? clonePlain(config) : {}
-    const useProxy = Boolean(base?.useCCSwitchProxy)
-    const useCCSwitch = Boolean(base?.useCCSwitch) || useProxy
+    const compatProxyEnabled =
+      base?.proxyEnabled == null ? Boolean(base?.useCCSwitchProxy) : Boolean(base?.proxyEnabled)
+    const useCCSwitch = Boolean(base?.useCCSwitch) || compatProxyEnabled
     if (!useCCSwitch) return { config: base, extraEnv: {} }
 
     // Safety: only allow CC Switch runtime rewrites for templates imported from CC Switch.
@@ -917,31 +1147,82 @@ class PTYManager {
     if (!isImportedFromCCSwitch(base)) {
       base.useCCSwitch = false
       base.useCCSwitchProxy = false
+      base.proxyEnabled = false
+      base.proxyImplementation = 'off'
       base.ccSwitchProviderId = ''
       return { config: base, extraEnv: {} }
     }
 
     const type = typeof base?.type === 'string' ? base.type : ''
-    const appKey =
-      type === 'claude-code' ? 'claude' : type === 'codex' ? 'codex' : type === 'opencode' ? 'opencode' : ''
+    const appKey = resolveAppKeyFromType(type)
     if (!appKey) return { config: base, extraEnv: {} }
 
+    const sessionId = typeof options?.sessionId === 'string' ? options.sessionId.trim() : ''
     const snapshot = await ccSwitch.listProviders()
-    const requestedProviderId =
-      typeof base?.ccSwitchProviderId === 'string' ? base.ccSwitchProviderId.trim() : ''
-    const currentProviderId = String(snapshot?.apps?.[appKey]?.currentId || '').trim()
-    const providerId = requestedProviderId || currentProviderId
-    const providers = Array.isArray(snapshot?.apps?.[appKey]?.providers) ? snapshot.apps[appKey].providers : []
-    const provider = providerId ? providers.find((p) => p && p.id === providerId) : null
+    const appProxyOrigin = await this.ensureAppProxyOrigin()
+    let policy = mergeEffectiveProxyPolicy({
+      template: base,
+      snapshot,
+      appKey,
+      appProxyOrigin
+    })
 
-    if (!provider && !useProxy) {
-      throw new Error(`CC Switch provider not found for ${appKey} (id=${providerId || '<current>'})`)
+    const providers = Array.isArray(snapshot?.apps?.[appKey]?.providers)
+      ? snapshot.apps[appKey].providers
+      : []
+    const requestedProviderId = typeof base?.ccSwitchProviderId === 'string' ? base.ccSwitchProviderId.trim() : ''
+    const currentProviderId = String(snapshot?.apps?.[appKey]?.currentId || '').trim()
+
+    const preferredProviderId = policy?.queue?.primaryProviderId || requestedProviderId || currentProviderId
+    let provider = preferredProviderId
+      ? providers.find((p) => p && p.id === preferredProviderId)
+      : null
+    if (!provider && providers.length > 0) provider = providers[0]
+
+    if (!provider && policy.routeMode !== 'ccswitch-proxy') {
+      throw new Error(`CC Switch provider not found for ${appKey} (id=${preferredProviderId || '<current>'})`)
     }
 
-    const proxyAppKey = appKey === 'opencode' ? 'codex' : appKey
-    const proxyCfg = snapshot?.proxy?.[proxyAppKey] || null
-    const proxyOrigin = useProxy ? buildProxyOrigin(proxyCfg?.listenAddress, proxyCfg?.listenPort) : null
-    const proxyOpenAIBase = proxyOrigin ? joinUrl(proxyOrigin, '/v1') : null
+    let proxyOrigin = null
+    let proxyOpenAIBase = null
+    let proxyPlaceholderToken = 'ccswitch'
+
+    if (policy.routeMode === 'ccswitch-proxy') {
+      proxyOrigin = policy.ccProxy.listenOrigin
+      proxyOpenAIBase = policy.ccProxy.openAIBase
+      proxyPlaceholderToken = 'ccswitch'
+    } else if (policy.routeMode === 'app-proxy') {
+      if (!sessionId || !appProxyOrigin) {
+        policy = { ...policy, routeMode: 'direct', circuitBreakerMode: 'off' }
+      } else {
+        const appProxyProviders = this.buildAppProxyProviders(
+          appKey,
+          providers,
+          policy?.queue?.orderedProviderIds || []
+        )
+        if (appProxyProviders.length === 0) {
+          policy = { ...policy, routeMode: 'direct', circuitBreakerMode: 'off' }
+        } else {
+          const orderedProviderIds = appProxyProviders.map((p) => p.id)
+          const registered = this.appProxyServer.upsertSession(sessionId, {
+            appKey,
+            orderedProviderIds,
+            providers: appProxyProviders,
+            failoverEnabled: Boolean(policy?.appFailover?.enabled),
+            retry: policy?.appFailover || {}
+          })
+
+          if (!registered) {
+            policy = { ...policy, routeMode: 'direct', circuitBreakerMode: 'off' }
+          } else {
+            const sessionProxyOrigin = joinUrl(appProxyOrigin, `/s/${encodeURIComponent(sessionId)}`)
+            proxyOrigin = sessionProxyOrigin
+            proxyOpenAIBase = joinUrl(sessionProxyOrigin, '/v1')
+            proxyPlaceholderToken = 'mps-proxy'
+          }
+        }
+      }
+    }
 
     const extraEnv = {}
 
@@ -950,15 +1231,20 @@ class PTYManager {
       const providerSettings = ensureObject(provider?.settingsConfig)
 
       const merged = mergeObjectsWithEnv(baseSettings, providerSettings)
-      if (useProxy && proxyOrigin) {
-        merged.env = ensureObject(merged.env)
-        merged.env.ANTHROPIC_BASE_URL = proxyOrigin
-        merged.env.ANTHROPIC_AUTH_TOKEN = 'ccswitch'
+      if (policy.routeMode === 'ccswitch-proxy' || policy.routeMode === 'app-proxy') {
+        if (proxyOrigin) {
+          merged.env = ensureObject(merged.env)
+          merged.env.ANTHROPIC_BASE_URL = proxyOrigin
+          merged.env.ANTHROPIC_AUTH_TOKEN = proxyPlaceholderToken
+        }
       }
 
       // Claude Code reads env vars from settings.json. Keep them file-based to avoid leaking in the terminal.
       base.claudeSettingsJson = JSON.stringify(merged, null, 2)
       base.useCCSwitch = true
+      base.useCCSwitchProxy = policy.routeMode === 'ccswitch-proxy'
+      base.proxyEnabled = compatProxyEnabled
+      base.proxyImplementation = policy.proxyImplementation
       return { config: base, extraEnv }
     }
 
@@ -976,14 +1262,14 @@ class PTYManager {
           ? clonePlain(providerAuth)
           : (parseJsonObject(base?.codexAuthJson) || {})
 
-      if (useProxy && proxyOpenAIBase) {
+      if ((policy.routeMode === 'ccswitch-proxy' || policy.routeMode === 'app-proxy') && proxyOpenAIBase) {
         const rewritten = rewriteTomlBaseUrl(toml, proxyOpenAIBase)
         toml = rewritten.replaced ? rewritten.text : makeCodexProxyToml(proxyOpenAIBase)
 
         authObj = ensureObject(authObj)
-        authObj.OPENAI_API_KEY = 'ccswitch'
-        authObj.api_key = 'ccswitch'
-        authObj.openai_api_key = 'ccswitch'
+        authObj.OPENAI_API_KEY = proxyPlaceholderToken
+        authObj.api_key = proxyPlaceholderToken
+        authObj.openai_api_key = proxyPlaceholderToken
 
         extraEnv.OPENAI_BASE_URL = proxyOpenAIBase
         extraEnv.OPENAI_API_BASE = proxyOpenAIBase
@@ -992,12 +1278,19 @@ class PTYManager {
       base.codexConfigToml = String(toml || '')
       base.codexAuthJson = JSON.stringify(authObj, null, 2)
       base.useCCSwitch = true
+      base.useCCSwitchProxy = policy.routeMode === 'ccswitch-proxy'
+      base.proxyEnabled = compatProxyEnabled
+      base.proxyImplementation = policy.proxyImplementation
       return { config: base, extraEnv }
     }
 
     if (type === 'opencode') {
       const providerSettings = provider ? extractOpenCodeProviderFragment(provider.settingsConfig, provider.id) : null
-      const providerIdForConfig = provider?.id || providerId || 'ccswitch'
+      const providerIdForConfig =
+        provider?.id ||
+        preferredProviderId ||
+        policy?.queue?.primaryProviderId ||
+        'ccswitch'
 
       const baseDoc =
         parseJsonObject(base?.opencodeConfigJson) ||
@@ -1016,16 +1309,16 @@ class PTYManager {
 
       let nextFragment =
         fragment ||
-        (useProxy && (proxyOpenAIBase || proxyOrigin)
+        ((policy.routeMode === 'ccswitch-proxy' || policy.routeMode === 'app-proxy') && (proxyOpenAIBase || proxyOrigin)
           ? {
               npm: '@ai-sdk/openai-compatible',
               name: 'CC Switch Proxy',
-              options: { baseURL: proxyOpenAIBase || proxyOrigin, apiKey: 'ccswitch' },
+              options: { baseURL: proxyOpenAIBase || proxyOrigin, apiKey: proxyPlaceholderToken },
               models: {}
             }
           : null)
 
-      if (useProxy && proxyOrigin) {
+      if ((policy.routeMode === 'ccswitch-proxy' || policy.routeMode === 'app-proxy') && proxyOrigin) {
         nextFragment = ensureObject(nextFragment)
         nextFragment.options = ensureObject(nextFragment.options)
         const npm = String(nextFragment.npm || '').toLowerCase()
@@ -1034,7 +1327,7 @@ class PTYManager {
             ? proxyOrigin
             : proxyOpenAIBase || proxyOrigin
         nextFragment.options.baseURL = baseURL
-        nextFragment.options.apiKey = 'ccswitch'
+        nextFragment.options.apiKey = proxyPlaceholderToken
       }
 
       if (nextFragment) {
@@ -1044,15 +1337,22 @@ class PTYManager {
 
       base.opencodeConfigJson = JSON.stringify(baseDoc, null, 2)
       base.useCCSwitch = true
+      base.useCCSwitchProxy = policy.routeMode === 'ccswitch-proxy'
+      base.proxyEnabled = compatProxyEnabled
+      base.proxyImplementation = policy.proxyImplementation
       return { config: base, extraEnv }
     }
 
+    base.useCCSwitch = true
+    base.useCCSwitchProxy = policy.routeMode === 'ccswitch-proxy'
+    base.proxyEnabled = compatProxyEnabled
+    base.proxyImplementation = policy.proxyImplementation
     return { config: base, extraEnv }
   }
   
   async createSession(config, workingDir, mainWindow) {
     const sessionId = uuidv4()
-    const resolved = await this.resolveCCSwitchRuntimeConfig(config)
+    const resolved = await this.resolveCCSwitchRuntimeConfig(config, { sessionId })
     const effectiveConfig = resolved?.config || config
     const extraEnv = resolved?.extraEnv && typeof resolved.extraEnv === 'object' ? resolved.extraEnv : {}
 
@@ -1186,13 +1486,19 @@ class PTYManager {
       contents.send(channel, payload)
     }
 
-    const ptyProcess = pty.spawn('powershell.exe', psArgs, {
-      name: 'xterm-color',
-      cols: 80,
-      rows: 30,
-      cwd: cwd,
-      env: env
-    })
+    let ptyProcess = null
+    try {
+      ptyProcess = pty.spawn('powershell.exe', psArgs, {
+        name: 'xterm-color',
+        cols: 80,
+        rows: 30,
+        cwd: cwd,
+        env: env
+      })
+    } catch (err) {
+      this.appProxyServer.removeSession(sessionId)
+      throw err
+    }
 
     shellMonitor.registerSession(sessionId, type, {
       configName: typeof effectiveConfig?.name === 'string' ? effectiveConfig.name : '',
@@ -1208,6 +1514,7 @@ class PTYManager {
       sendToWindow('terminal:exit', { sessionId, code: exitCode })
       shellMonitor.onExit(sessionId, exitCode)
       this.cleanupCodexHome(sessionId)
+      this.appProxyServer.removeSession(sessionId)
       this.sessions.delete(sessionId)
     })
     
@@ -1241,6 +1548,7 @@ class PTYManager {
     }
 
     this.cleanupCodexHome(sessionId)
+    this.appProxyServer.removeSession(sessionId)
     shellMonitor.unregisterSession(sessionId)
   }
   
@@ -1249,6 +1557,7 @@ class PTYManager {
       try {
         session.kill()
       } catch (_) {}
+      this.appProxyServer.removeSession(sessionId)
       shellMonitor.unregisterSession(sessionId)
     }
     this.sessions.clear()

@@ -25,7 +25,11 @@ export const pickDefaultCCSwitchTemplate = (templates) => {
   if (list.length === 0) return null
 
   // Prefer proxy-based configs when the user is relying on CC Switch proxy.
-  const proxyConfig = list.find((cfg) => Boolean(cfg.useCCSwitchProxy))
+  const proxyConfig = list.find((cfg) => {
+    if (Boolean(cfg.useCCSwitchProxy)) return true
+    if (!Boolean(cfg.proxyEnabled)) return false
+    return String(cfg.proxyImplementation || '').trim().toLowerCase() === 'ccswitch'
+  })
   if (proxyConfig) return proxyConfig
 
   const ccSwitchConfig = list.find((cfg) => Boolean(cfg.useCCSwitch))

@@ -1,6 +1,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { resolveProxyAppKey } = require('./ccswitch-policy')
 
 const CC_SWITCH_APP_ID = 'com.ccswitch.desktop'
 const STORE_FILE = 'app_paths.json'
@@ -403,6 +404,16 @@ function toMultipleShellConfigs(providerSnapshot) {
       importSource: 'ccswitch',
       useCCSwitch: true,
       useCCSwitchProxy: false,
+      proxyEnabled: false,
+      proxyImplementation: 'app',
+      respectCCSwitchProxyConfig: true,
+      proxyQueueMode: 'failover-queue',
+      proxyAllowProviderIds: [],
+      proxyDenyProviderIds: [],
+      appFailoverEnabled: null,
+      appBreakerEnabled: null,
+      breakerConfig: {},
+      retryConfig: {},
       ccSwitchProviderId: p.id,
       envVars: {},
       claudeSettingsJson: JSON.stringify(settings, null, 2),
@@ -424,6 +435,16 @@ function toMultipleShellConfigs(providerSnapshot) {
       importSource: 'ccswitch',
       useCCSwitch: true,
       useCCSwitchProxy: false,
+      proxyEnabled: false,
+      proxyImplementation: 'app',
+      respectCCSwitchProxyConfig: true,
+      proxyQueueMode: 'failover-queue',
+      proxyAllowProviderIds: [],
+      proxyDenyProviderIds: [],
+      appFailoverEnabled: null,
+      appBreakerEnabled: null,
+      breakerConfig: {},
+      retryConfig: {},
       ccSwitchProviderId: p.id,
       envVars: {},
       claudeSettingsJson: '',
@@ -450,6 +471,16 @@ function toMultipleShellConfigs(providerSnapshot) {
       importSource: 'ccswitch',
       useCCSwitch: true,
       useCCSwitchProxy: false,
+      proxyEnabled: false,
+      proxyImplementation: 'app',
+      respectCCSwitchProxyConfig: true,
+      proxyQueueMode: 'failover-queue',
+      proxyAllowProviderIds: [],
+      proxyDenyProviderIds: [],
+      appFailoverEnabled: null,
+      appBreakerEnabled: null,
+      breakerConfig: {},
+      retryConfig: {},
       ccSwitchProviderId: p.id,
       envVars: {},
       claudeSettingsJson: '',
@@ -473,7 +504,8 @@ async function importProviders(configManager, options = {}) {
     if (!next || typeof next !== 'object') return next
 
     const type = typeof next.type === 'string' ? next.type : ''
-    const proxyAppKey = type === 'claude-code' ? 'claude' : type === 'codex' ? 'codex' : type === 'opencode' ? 'codex' : ''
+    const appKey = type === 'claude-code' ? 'claude' : type === 'codex' ? 'codex' : type === 'opencode' ? 'opencode' : ''
+    const proxyAppKey = resolveProxyAppKey(appKey)
     const proxyCfg = proxyAppKey ? snapshot?.proxy?.[proxyAppKey] : null
 
     // If CC Switch proxy + auto-failover is enabled for this app, default imports to using the proxy.
@@ -484,10 +516,11 @@ async function importProviders(configManager, options = {}) {
     const autoFailoverEnabled = Boolean(proxyCfg && proxyCfg.autoFailoverEnabled)
     const shouldUseProxy = proxyEnabled && enabled && autoFailoverEnabled
 
-    if (shouldUseProxy) {
-      next.useCCSwitch = true
-      next.useCCSwitchProxy = true
-    }
+    next.useCCSwitch = true
+    next.useCCSwitchProxy = shouldUseProxy
+    next.proxyEnabled = shouldUseProxy
+    next.proxyImplementation = shouldUseProxy ? 'ccswitch' : 'app'
+    next.respectCCSwitchProxyConfig = true
 
     return next
   })

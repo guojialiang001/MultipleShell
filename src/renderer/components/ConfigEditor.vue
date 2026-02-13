@@ -17,6 +17,16 @@ const form = ref({
   importSource: '',
   useCCSwitch: false,
   useCCSwitchProxy: false,
+  proxyEnabled: false,
+  proxyImplementation: 'app',
+  respectCCSwitchProxyConfig: true,
+  proxyQueueMode: 'failover-queue',
+  proxyAllowProviderIdsText: '',
+  proxyDenyProviderIdsText: '',
+  appFailoverEnabled: true,
+  appBreakerEnabled: true,
+  breakerConfig: {},
+  retryConfig: {},
   ccSwitchProviderId: ''
 })
 
@@ -54,6 +64,22 @@ const selectedTypeLabel = computed(() => {
   const opt = TYPE_OPTIONS.value.find(o => o.value === form.value.type)
   return opt ? opt.label : t('configEditor.selectType')
 })
+
+const VALID_PROXY_IMPLEMENTATIONS = new Set(['off', 'app', 'ccswitch'])
+const VALID_PROXY_QUEUE_MODES = new Set(['failover-queue', 'all-providers', 'custom'])
+
+const normalizeIdList = (value) => {
+  const out = []
+  const seen = new Set()
+  const chunks = String(value || '').split(/[,;\n]/g)
+  for (const chunk of chunks) {
+    const id = String(chunk || '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
 
 const toggleDropdown = () => {
   isDropdownOpen.value = !isDropdownOpen.value
@@ -232,6 +258,34 @@ watch(
         importSource: typeof newConfig?.importSource === 'string' ? newConfig.importSource : '',
         useCCSwitch: Boolean(newConfig?.useCCSwitch),
         useCCSwitchProxy: Boolean(newConfig?.useCCSwitchProxy),
+        proxyEnabled:
+          newConfig?.proxyEnabled == null ? Boolean(newConfig?.useCCSwitchProxy) : Boolean(newConfig?.proxyEnabled),
+        proxyImplementation: (() => {
+          const raw = String(newConfig?.proxyImplementation || '').trim().toLowerCase()
+          if (VALID_PROXY_IMPLEMENTATIONS.has(raw)) return raw
+          return Boolean(newConfig?.useCCSwitchProxy) ? 'ccswitch' : 'app'
+        })(),
+        respectCCSwitchProxyConfig: newConfig?.respectCCSwitchProxyConfig === false ? false : true,
+        proxyQueueMode: (() => {
+          const raw = String(newConfig?.proxyQueueMode || '').trim().toLowerCase()
+          return VALID_PROXY_QUEUE_MODES.has(raw) ? raw : 'failover-queue'
+        })(),
+        proxyAllowProviderIdsText:
+          Array.isArray(newConfig?.proxyAllowProviderIds) ? newConfig.proxyAllowProviderIds.join(', ') : '',
+        proxyDenyProviderIdsText:
+          Array.isArray(newConfig?.proxyDenyProviderIds) ? newConfig.proxyDenyProviderIds.join(', ') : '',
+        appFailoverEnabled:
+          newConfig?.appFailoverEnabled == null ? true : Boolean(newConfig?.appFailoverEnabled),
+        appBreakerEnabled:
+          newConfig?.appBreakerEnabled == null ? true : Boolean(newConfig?.appBreakerEnabled),
+        breakerConfig:
+          newConfig?.breakerConfig && typeof newConfig.breakerConfig === 'object' && !Array.isArray(newConfig.breakerConfig)
+            ? { ...newConfig.breakerConfig }
+            : {},
+        retryConfig:
+          newConfig?.retryConfig && typeof newConfig.retryConfig === 'object' && !Array.isArray(newConfig.retryConfig)
+            ? { ...newConfig.retryConfig }
+            : {},
         ccSwitchProviderId: typeof newConfig?.ccSwitchProviderId === 'string' ? newConfig.ccSwitchProviderId : ''
       }
       lastLoadedConfigUpdatedAt.value = typeof newConfig?.updatedAt === 'string' ? newConfig.updatedAt : null
@@ -256,7 +310,26 @@ watch(
       codexConfigTomlText.value = typeof newConfig?.codexConfigToml === 'string' ? newConfig.codexConfigToml : ''
       codexAuthJsonText.value = typeof newConfig?.codexAuthJson === 'string' ? newConfig.codexAuthJson : ''
     } else {
-      form.value = { id: null, type: '', name: '', envVars: {}, importSource: '', useCCSwitch: false, useCCSwitchProxy: false, ccSwitchProviderId: '' }
+      form.value = {
+        id: null,
+        type: '',
+        name: '',
+        envVars: {},
+        importSource: '',
+        useCCSwitch: false,
+        useCCSwitchProxy: false,
+        proxyEnabled: false,
+        proxyImplementation: 'app',
+        respectCCSwitchProxyConfig: true,
+        proxyQueueMode: 'failover-queue',
+        proxyAllowProviderIdsText: '',
+        proxyDenyProviderIdsText: '',
+        appFailoverEnabled: true,
+        appBreakerEnabled: true,
+        breakerConfig: {},
+        retryConfig: {},
+        ccSwitchProviderId: ''
+      }
       lastLoadedConfigUpdatedAt.value = null
       configJsonText.value = JSON.stringify({ env: {} }, null, 2)
       claudeSettingsJsonText.value = getClaudeSettingsTemplate()
@@ -281,16 +354,31 @@ watch(
 )
 
 watch(
-  () => form.value.useCCSwitchProxy,
+  () => form.value.proxyEnabled,
   (v) => {
     if (v) form.value.useCCSwitch = true
+    form.value.useCCSwitchProxy = Boolean(v) && form.value.proxyImplementation === 'ccswitch'
+  }
+)
+
+watch(
+  () => form.value.proxyImplementation,
+  (v) => {
+    const normalized = VALID_PROXY_IMPLEMENTATIONS.has(String(v || '').trim().toLowerCase())
+      ? String(v || '').trim().toLowerCase()
+      : 'app'
+    if (normalized !== v) form.value.proxyImplementation = normalized
+    form.value.useCCSwitchProxy = form.value.proxyEnabled && normalized === 'ccswitch'
   }
 )
 
 watch(
   () => form.value.useCCSwitch,
   (v) => {
-    if (!v) form.value.useCCSwitchProxy = false
+    if (!v) {
+      form.value.proxyEnabled = false
+      form.value.useCCSwitchProxy = false
+    }
   }
 )
 
@@ -459,8 +547,27 @@ const save = () => {
       ? (String(opencodeConfigJsonText.value || '').trim() || getOpenCodeConfigTemplate())
       : (typeof opencodeConfigJsonText.value === 'string' ? opencodeConfigJsonText.value : '')
 
+  const proxyEnabled = Boolean(form.value.proxyEnabled)
+  const proxyImplementation = VALID_PROXY_IMPLEMENTATIONS.has(String(form.value.proxyImplementation || '').trim().toLowerCase())
+    ? String(form.value.proxyImplementation || '').trim().toLowerCase()
+    : 'app'
+  const useCCSwitchProxy = proxyEnabled && proxyImplementation === 'ccswitch'
+  const useCCSwitch = Boolean(form.value.useCCSwitch) || proxyEnabled
+
   emit('save', {
     ...form.value,
+    useCCSwitch,
+    useCCSwitchProxy,
+    proxyEnabled,
+    proxyImplementation,
+    respectCCSwitchProxyConfig: form.value.respectCCSwitchProxyConfig !== false,
+    proxyQueueMode: VALID_PROXY_QUEUE_MODES.has(String(form.value.proxyQueueMode || '').trim().toLowerCase())
+      ? String(form.value.proxyQueueMode || '').trim().toLowerCase()
+      : 'failover-queue',
+    proxyAllowProviderIds: normalizeIdList(form.value.proxyAllowProviderIdsText),
+    proxyDenyProviderIds: normalizeIdList(form.value.proxyDenyProviderIdsText),
+    appFailoverEnabled: Boolean(form.value.appFailoverEnabled),
+    appBreakerEnabled: Boolean(form.value.appBreakerEnabled),
     envVars,
     claudeSettingsJson,
     codexConfigToml: codexConfigTomlText.value || '',
@@ -510,6 +617,90 @@ const save = () => {
            <label>{{ t('configEditor.name') }}</label>
            <input v-model="form.name" type="text" :placeholder="t('configEditor.placeholders.name')" />
            </div>
+
+          <div class="form-group">
+            <label>{{ t('configEditor.ccSwitchTitle') }}</label>
+            <div class="check-row">
+              <label class="check-item">
+                <input v-model="form.useCCSwitch" type="checkbox" />
+                <span>{{ t('configSelector.useCCSwitch') }}</span>
+              </label>
+              <label class="check-item">
+                <input v-model="form.proxyEnabled" type="checkbox" :disabled="!form.useCCSwitch" />
+                <span>{{ t('configEditor.proxyEnabled') }}</span>
+              </label>
+            </div>
+
+            <div class="inline-grid">
+              <div class="inline-field">
+                <label>{{ t('configEditor.proxyImplementation') }}</label>
+                <select v-model="form.proxyImplementation" :disabled="!form.useCCSwitch || !form.proxyEnabled">
+                  <option value="app">{{ t('configEditor.proxyImplementationApp') }}</option>
+                  <option value="ccswitch">{{ t('configEditor.proxyImplementationCCSwitch') }}</option>
+                  <option value="off">{{ t('configEditor.proxyImplementationOff') }}</option>
+                </select>
+              </div>
+              <div class="inline-field">
+                <label>{{ t('configEditor.proxyQueueMode') }}</label>
+                <select v-model="form.proxyQueueMode" :disabled="!form.useCCSwitch || !form.proxyEnabled">
+                  <option value="failover-queue">{{ t('configEditor.proxyQueueModeFailoverQueue') }}</option>
+                  <option value="all-providers">{{ t('configEditor.proxyQueueModeAllProviders') }}</option>
+                  <option value="custom">{{ t('configEditor.proxyQueueModeCustom') }}</option>
+                </select>
+              </div>
+            </div>
+
+            <label class="check-item">
+              <input
+                v-model="form.respectCCSwitchProxyConfig"
+                type="checkbox"
+                :disabled="!form.useCCSwitch || !form.proxyEnabled"
+              />
+              <span>{{ t('configEditor.respectCCSwitchProxyConfig') }}</span>
+            </label>
+
+            <div class="inline-grid">
+              <div class="inline-field">
+                <label>{{ t('configEditor.proxyAllowProviderIds') }}</label>
+                <input
+                  v-model="form.proxyAllowProviderIdsText"
+                  type="text"
+                  :placeholder="t('configEditor.providerIdListPlaceholder')"
+                  :disabled="!form.useCCSwitch || !form.proxyEnabled"
+                />
+              </div>
+              <div class="inline-field">
+                <label>{{ t('configEditor.proxyDenyProviderIds') }}</label>
+                <input
+                  v-model="form.proxyDenyProviderIdsText"
+                  type="text"
+                  :placeholder="t('configEditor.providerIdListPlaceholder')"
+                  :disabled="!form.useCCSwitch || !form.proxyEnabled"
+                />
+              </div>
+            </div>
+
+            <div class="check-row">
+              <label class="check-item">
+                <input v-model="form.appFailoverEnabled" type="checkbox" :disabled="!form.useCCSwitch || !form.proxyEnabled" />
+                <span>{{ t('configEditor.appFailoverEnabled') }}</span>
+              </label>
+              <label class="check-item">
+                <input v-model="form.appBreakerEnabled" type="checkbox" :disabled="!form.useCCSwitch || !form.proxyEnabled" />
+                <span>{{ t('configEditor.appBreakerEnabled') }}</span>
+              </label>
+            </div>
+
+            <div class="inline-field">
+              <label>{{ t('configEditor.ccSwitchProviderId') }}</label>
+              <input
+                v-model="form.ccSwitchProviderId"
+                type="text"
+                :placeholder="t('configEditor.ccSwitchProviderIdPlaceholder')"
+                :disabled="!form.useCCSwitch"
+              />
+            </div>
+          </div>
 
           <div v-if="!isCodex && !isClaudeCode && !isOpenCode" class="form-group">
             <label>{{ t('configEditor.configJson') }}</label>
@@ -813,6 +1004,44 @@ label {
   font-weight: 500;
 }
 
+.check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.check-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.check-item input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+
+.inline-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.inline-field {
+  margin-bottom: 10px;
+}
+
+.inline-field label {
+  margin-bottom: 6px;
+}
+
 .custom-select {
   position: relative;
   width: 100%;
@@ -918,6 +1147,7 @@ label {
 
 input,
 textarea,
+select,
 .select {
   width: 100%;
   padding: 10px 12px;
@@ -933,6 +1163,7 @@ textarea,
 
 input:focus,
 textarea:focus,
+select:focus,
 .select:focus {
   border-color: var(--primary-color);
 }
@@ -1030,5 +1261,11 @@ textarea:focus,
   background: var(--bg-tertiary);
   color: var(--text-primary);
   border-color: var(--border-accent);
+}
+
+@media (max-width: 780px) {
+  .inline-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

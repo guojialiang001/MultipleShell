@@ -235,7 +235,9 @@ const filteredTemplates = computed(() => {
   if (props.mode !== 'create') return list
   if (!onlyCCSwitchConfigs.value) return list
 
-  return list.filter((cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy))
+  return list.filter(
+    (cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy) || Boolean(cfg?.proxyEnabled)
+  )
 })
 
 const resolveConfigKey = (cfg) => String(cfg?.id || cfg?.name || '').trim()
@@ -258,7 +260,9 @@ const getVisibleTemplatesForType = (templates, type) => {
   if (props.mode !== 'create') return list
   if (!onlyCCSwitchConfigs.value) return list
 
-  return list.filter((cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy))
+  return list.filter(
+    (cfg) => Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy) || Boolean(cfg?.proxyEnabled)
+  )
 }
 
 const canAutoPickCCSwitchTemplate = computed(() => {
@@ -292,7 +296,7 @@ const isCCSwitchImportedConfig = (cfg) => {
 const getCCSwitchPriorityTag = (cfg) => {
   if (!canAutoPickCCSwitchTemplate.value) return ''
   if (!cfg || typeof cfg !== 'object') return ''
-  if (!cfg.useCCSwitch && !cfg.useCCSwitchProxy) return ''
+  if (!cfg.useCCSwitch && !cfg.useCCSwitchProxy && !cfg.proxyEnabled) return ''
   const id = typeof cfg.ccSwitchProviderId === 'string' ? cfg.ccSwitchProviderId.trim() : ''
   if (!id) return ''
   const p = ccSwitchFailoverPriorityById.value?.[id]
@@ -321,7 +325,7 @@ watch(onlyCCSwitchConfigs, (v) => {
 
   const cfg = selectedConfig.value
   if (!cfg) return
-  const isCCSwitch = Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy)
+  const isCCSwitch = Boolean(cfg?.useCCSwitch) || Boolean(cfg?.useCCSwitchProxy) || Boolean(cfg?.proxyEnabled)
   if (!isCCSwitch) selectedConfigId.value = ''
 })
 
@@ -426,6 +430,16 @@ const addTemplate = () => {
     envVars: {},
     useCCSwitch: false,
     useCCSwitchProxy: false,
+    proxyEnabled: false,
+    proxyImplementation: 'app',
+    respectCCSwitchProxyConfig: true,
+    proxyQueueMode: 'failover-queue',
+    proxyAllowProviderIds: [],
+    proxyDenyProviderIds: [],
+    appFailoverEnabled: true,
+    appBreakerEnabled: true,
+    breakerConfig: {},
+    retryConfig: {},
     ccSwitchProviderId: ''
   }
   showEditor.value = true
