@@ -8,6 +8,7 @@
 非目标（明确边界）：
 - 不做协议/JSON body 转换（只做路由 + headers 注入 + 透传）
 - 不做“流式中途无缝切换”（仅做未写出前的安全重试；streaming 一旦写出就不切换）
+- 不做 Hedged Requests（对冲请求；成本高且流式难取消计费）
 
 ---
 
@@ -15,10 +16,12 @@
 
 ### 1) 配置项 / 选项（模板 + UI）
 - [x] 增加模板字段（或等价映射）：`proxyEnabled`、`proxyImplementation('app'|'ccswitch'|'off')`
-- [x] 增加“融合 CC Switch 控制面”的开关：`respectCCSwitchProxyConfig`（默认 true）
+- [x] 增加“融合 CC Switch 控制面”的开关：`respectCCSwitchProxyConfig`（当前默认 true；建议生产默认 false / 或改用独立字段）
 - [x] 增加队列模式：`proxyQueueMode('failover-queue'|'all-providers'|'custom')` + `allow/deny`（可选）
 - [x] 增加本地 failover/breaker 开关：`appFailoverEnabled`、`appBreakerEnabled`
 - [x] 增加参数对象：`breakerConfig`、`retryConfig`（先支持最小必要字段）
+- [ ] 配置收敛：模板/UI 默认只暴露 `proxyEnabled` + `proxyImplementation`（其余作为高级设置/内部默认，避免配置膨胀）
+- [ ] 语义澄清：避免复用 `proxy_config.enabled/auto_failover_enabled` 作为 app-proxy 运营开关；更推荐在 CC Switch 增加独立字段（如 `app_proxy_enabled` / `app_auto_failover_enabled`）或独立表
 - [x] 兼容旧字段迁移：
   - [x] `proxyEnabled = template.proxyEnabled ?? Boolean(template.useCCSwitchProxy)`
   - [x] `proxyImplementation = template.proxyImplementation ?? (template.useCCSwitchProxy ? 'ccswitch' : 'app')`
@@ -36,8 +39,10 @@
 
 ### 3) 队列算法（把 CC Switch providers 融入本地队列）
 - [x] 实现 `buildQueueFromCCSwitchProviders(providers, requestedProviderId, currentProviderId, queueMode, allow, deny)`
-- [x] primary 选择规则（优先 requested -> current -> is_current -> fallback）
+- [x] primary 选择规则（当前：requested -> current -> is_current -> fallback；建议简化为：requested -> current -> queue[0]）
+- [ ] primary 简化重构：删除 `is_current` fallback 分支（减少排查分支；以队列首位作为兜底）
 - [x] failoverCandidates：按 `in_failover_queue=true` + `sort_index` + `id` 排序，去重且移除 primary
+- [ ] 队列构建阶段强校验：协议一致性/接口能力/模型命名；不兼容 provider 剔除并记录 warning（否则 failover 切换后仍可能失败）
 - [x] `orderedProviderIds` 合成：
   - [x] `failover-queue`：`[primary] + failoverCandidates`
   - [x] `all-providers`：`[primary] + 其它 provider`
@@ -110,6 +115,12 @@
 ### 13) 安全强化
 - [ ] 可选 `proxySecret`：本机进程滥用防护（header/query）
 - [ ] 更严格的监听与端口冲突处理（自动找空闲端口/提示）
+
+### 14) 热更新与生命周期（落地必做）
+- [ ] 快照变更感知：providers/proxy_config 变化后是轮询（pull）还是推送（push）
+- [ ] policy 热更新：队列变化时刷新路由；provider 增删时清理/初始化对应 breaker 状态
+- [ ] in-flight 边界：不做“流中切换”；让正在进行的请求按旧 policy 跑完，新请求用新 policy
+- [ ] 端口冲突/启动失败：明确错误提示；可选自动选择空闲端口并同步更新客户端 baseURL
 
 ---
 

@@ -552,9 +552,15 @@ class PTYManager {
       const providerId = String(id || '').trim()
       if (!providerId) continue
       const provider = providerMap.get(providerId)
-      if (!provider) continue
+      if (!provider) {
+        console.warn(`[PTYManager] App proxy provider not found in CC Switch snapshot: ${appKey}:${providerId}`)
+        continue
+      }
       const upstream = extractProviderUpstream(appKey, provider)
-      if (!upstream || !upstream.upstreamBaseUrl) continue
+      if (!upstream || !upstream.upstreamBaseUrl) {
+        console.warn(`[PTYManager] Provider upstream is missing/invalid, skipping: ${appKey}:${providerId}`)
+        continue
+      }
       out.push({
         id: providerId,
         upstreamBaseUrl: upstream.upstreamBaseUrl,
@@ -1209,7 +1215,9 @@ class PTYManager {
             orderedProviderIds,
             providers: appProxyProviders,
             failoverEnabled: Boolean(policy?.appFailover?.enabled),
-            retry: policy?.appFailover || {}
+            breakerEnabled: Boolean(policy?.appBreaker?.enabled),
+            retry: policy?.appFailover || {},
+            breaker: policy?.appBreaker || {}
           })
 
           if (!registered) {

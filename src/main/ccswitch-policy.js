@@ -73,18 +73,6 @@ const sortByFailoverPriority = (a, b) => {
   return a.id.localeCompare(b.id)
 }
 
-const pickPrimaryProviderId = (providers, requestedProviderId, currentProviderId) => {
-  if (!Array.isArray(providers) || providers.length === 0) return null
-  const ids = new Set(providers.map((p) => p.id))
-  const requested = normalizeId(requestedProviderId)
-  const current = normalizeId(currentProviderId)
-  if (requested && ids.has(requested)) return requested
-  if (current && ids.has(current)) return current
-  const markedCurrent = providers.find((p) => p.isCurrent)
-  if (markedCurrent) return markedCurrent.id
-  return providers[0].id
-}
-
 const applyAllowDeny = (ids, allow, deny) => {
   let out = Array.isArray(ids) ? [...ids] : []
   const allowSet = new Set(asStringArray(allow))
@@ -116,7 +104,19 @@ function buildQueueFromCCSwitchProviders(
   }
 
   const effectiveQueueMode = VALID_QUEUE_MODES.has(queueMode) ? queueMode : 'failover-queue'
-  const primaryProviderId = pickPrimaryProviderId(normalizedProviders, requestedProviderId, currentProviderId)
+  const ids = new Set(normalizedProviders.map((p) => p.id))
+  const requested = normalizeId(requestedProviderId)
+  const current = normalizeId(currentProviderId)
+
+  const failoverOrderedProviders = normalizedProviders
+    .filter((p) => p.inFailoverQueue)
+    .sort(sortByFailoverPriority)
+
+  const primaryProviderId =
+    (requested && ids.has(requested) && requested) ||
+    (current && ids.has(current) && current) ||
+    failoverOrderedProviders[0]?.id ||
+    normalizedProviders[0].id
   if (!primaryProviderId) {
     return {
       primaryProviderId: null,
@@ -124,10 +124,9 @@ function buildQueueFromCCSwitchProviders(
     }
   }
 
-  const failoverCandidates = normalizedProviders
-    .filter((p) => p.inFailoverQueue && p.id !== primaryProviderId)
-    .sort(sortByFailoverPriority)
+  const failoverCandidates = failoverOrderedProviders
     .map((p) => p.id)
+    .filter((id) => id !== primaryProviderId)
 
   const allCandidates = normalizedProviders
     .filter((p) => p.id !== primaryProviderId)

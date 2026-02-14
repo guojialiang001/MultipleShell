@@ -78,7 +78,7 @@ type EffectiveProxyPolicy = {
   appKey: 'claude' | 'codex' | 'opencode'
   source: 'ccswitch' | 'local'
 
-  // 模板侧意图（建议新增选项，不要只靠一个布尔值表达“代理+熔断”）
+  // 模板侧意图（建议第一版只新增 2~3 个用户可见选项，避免配置膨胀；其余用默认值内部处理）
   wantUseCCSwitch: boolean
   wantUseProxy: boolean
   proxyImplementation: 'off' | 'app' | 'ccswitch' // 应用内置 / CC Switch Proxy / 不走代理
@@ -131,6 +131,8 @@ type EffectiveProxyPolicy = {
 }
 ```
 
+> 提示：上面是“全量概念模型”，方便讨论合并规则；落地时建议按模块拆分（merge/queue/proxy/breaker），并且不要把所有字段都暴露成模板/UI 选项（见 4.1.1）。
+
 这样做的好处：
 - UI 展示、导入默认值、运行时重写、Proxy Server 启停，都可以基于同一套规则，避免“前后不一致”。
 
@@ -148,17 +150,29 @@ type EffectiveProxyPolicy = {
 
 #### 4.1.1 需要新增的选项（建议）
 
-要实现“应用本地代理 + 熔断/Failover”，并把 CC Switch 的配置融入**代理队列与熔断开关**，建议在模板增加（或等价映射）如下字段：
+要实现“应用本地代理 + 熔断/Failover”，并把 CC Switch 的配置融入**代理队列与熔断开关**，建议分两层看待配置：
+
+- **用户可见（MVP）**：先只暴露 2~3 个选项，避免配置膨胀；其余用合理默认值在内部处理。  
+- **高级/内部（可选）**：当你真的需要“可运营/可调参”时再开放；否则保持隐藏，减少误用与排查成本。
+
+**用户可见（建议先做）**
 
 | 字段（示例命名） | 类型 | 建议默认值 | 说明 |
 | --- | --- | --- | --- |
 | `proxyEnabled` | boolean | `false` | 是否启用代理（统一语义：无论最终走 app-proxy 还是 ccswitch-proxy） |
 | `proxyImplementation` | `'app' \| 'ccswitch' \| 'off'` | `'app'` | 选择代理实现：应用内置 Proxy / CC Switch Proxy / 关闭 |
-| `respectCCSwitchProxyConfig` | boolean | `true` | 是否把 `proxy_config.enabled/auto_failover_enabled` 当作“运营开关”（影响是否启用代理/是否启用 failover） |
+
+> 说明：`ccSwitchProviderId`（用户指定 provider）属于既有字段，通常仍需要保留。
+
+**高级/内部选项（默认不建议作为模板字段）**
+
+| 字段（示例命名） | 类型 | 建议默认值 | 说明 |
+| --- | --- | --- | --- |
+| `respectCCSwitchProxyConfig` | boolean | `false` | （谨慎）是否复用 `proxy_config.enabled/auto_failover_enabled` 当作“运营开关”（本仓库当前实现默认为 `true`；更推荐在 CC Switch 增加独立字段，如 `app_proxy_enabled`；见 5.6.1/第 9 节第 2 点） |
 | `proxyQueueMode` | `'failover-queue' \| 'all-providers' \| 'custom'` | `'failover-queue'` | 队列模式（见 **5.5.2**） |
 | `proxyAllowProviderIds` | `string[]` | `null` | 白名单（`custom` 时使用） |
 | `proxyDenyProviderIds` | `string[]` | `null` | 黑名单（可与白名单组合） |
-| `appFailoverEnabled` | boolean |（见合并规则）| app-proxy 是否启用自动切换（可默认跟随 `auto_failover_enabled`） |
+| `appFailoverEnabled` | boolean |（见合并规则）| app-proxy 是否启用自动切换（可默认跟随运营开关） |
 | `appBreakerEnabled` | boolean | `true` | app-proxy 是否启用熔断 |
 | `breakerConfig` | object |（见 5.6）| `failureThreshold/openDurationMs/...` |
 | `retryConfig` | object |（见 5.7）| `maxAttempts/commitDelayMs/commitBytes/...` |
@@ -197,7 +211,7 @@ openAIBase = listenOrigin ? listenOrigin + '/v1' : null
 proxyEnabled = template.proxyEnabled ?? Boolean(template.useCCSwitchProxy)
 proxyImplementation =
   template.proxyImplementation ?? (template.useCCSwitchProxy ? 'ccswitch' : 'app')
-respectCC = (template.respectCCSwitchProxyConfig !== false) // default true
+respectCC = (template.respectCCSwitchProxyConfig !== false) // current default true（建议生产默认 false；见 5.6.1）
 queueMode = template.proxyQueueMode ?? 'failover-queue'
 
 // 2) 构建上游队列（把 CC Switch providers 融入本地 proxy 队列）
@@ -252,7 +266,7 @@ else:
 > - 这里把“是否走代理”（`proxyEnabled`）与“走哪种代理”（`proxyImplementation`）拆开，避免旧字段语义混淆。  
 > - “把 CC Switch 配置融入本地代理队列和熔断”主要体现在两点：  
 >   1) **队列**：从 `snapshot.apps[appKey].providers` 生成 `orderedProviderIds`（见 5.5.2）  
->   2) **开关**：可选 `respectCCSwitchProxyConfig=true`，用 `proxy_config.enabled/auto_failover_enabled` 控制本地代理的启用与 failover（见 5.6.1）
+>   2) **开关**：（谨慎）可选 `respectCCSwitchProxyConfig=true`，用 `proxy_config.enabled/auto_failover_enabled` 控制本地代理的启用与 failover（见 5.6.1/第 9 节第 2 点；更推荐独立字段如 `app_proxy_enabled`）
 
 ---
 
@@ -348,7 +362,8 @@ Failover 想“无感”，队列里的 provider 至少要做到：
 - **同接口能力**：例如 Codex 走 `responses`，但某些上游只支持 `chat.completions`，会直接 404/405/400  
 - **同模型命名**：请求里 `model=...` 必须在所有候选 provider 上都可用，否则会出现“切换后仍失败”
 
-工程化建议（二选一或组合）：
+工程化建议（建议组合）：
+（推荐）在队列构建阶段强制校验协议一致性/接口能力/模型命名；不兼容 provider 直接剔除并记录 warning。
 1) **运营约束**：只把“确定兼容”的 provider 放进 `in_failover_queue`（最简单、最稳）。  
 2) **能力探测/缓存（可选）**：启动时或定期探测 provider 是否支持某些路径（如 `/v1/models`、`/v1/responses`），把结果缓存在内存里，路由时按能力过滤候选集。  
 3) **把一部分 4xx 也当作可切换错误（谨慎）**：例如明确识别“endpoint not found / method not allowed / model not found”后，允许切下一个 provider；但这通常要依赖错误字符串或 provider 特性，容易误判。
@@ -364,18 +379,19 @@ Failover 想“无感”，队列里的 provider 至少要做到：
 
 推荐生成顺序（概念）：
 
-1) **选 primary（首选上游）**
-   - 若 `requestedProviderId` 存在且在列表里：primary = requestedProviderId
-   - 否则若 `currentProviderId` 存在：primary = currentProviderId
-   - 否则若存在 `is_current=true` 的 provider：primary = 该 provider
-   - 否则：primary = `providers[0].id`（或按你的现有排序）
-
-2) **生成 failoverCandidates（自动切换候选）**
+1) **先生成 failoverOrdered（Failover 候选的有序列表）**
    - 过滤：`in_failover_queue = true`
    - 排序：`COALESCE(sort_index, 999999)` 升序，然后 `id` 升序
-   - 去重：移除 primary（避免重复）
 
-3) **合成 orderedProviderIds（按 `proxyQueueMode`）**
+2) **选 primary（首选上游）**
+   - 若 `requestedProviderId` 存在且在列表里：primary = requestedProviderId
+   - 否则若 `currentProviderId` 存在且在列表里：primary = currentProviderId
+   - 否则：primary = `failoverOrdered[0].id ?? providers[0].id`
+
+3) **生成 failoverCandidates（自动切换候选）**
+   - `failoverCandidates = failoverOrdered` 去掉 primary（避免重复）
+
+4) **合成 orderedProviderIds（按 `proxyQueueMode`）**
    - `failover-queue`（默认）：`[primary] + failoverCandidates`
    - `all-providers`：`[primary] + (providers 中除 primary 外的其它 provider，按 failoverPriority 或 id 排序)`
    - `custom`：在上述结果基础上应用 `allow/deny`（白名单优先），若 primary 被过滤则改用第一项作为 primary
@@ -405,20 +421,29 @@ Failover 想“无感”，队列里的 provider 至少要做到：
 - HTTP：`408/429/5xx`
 - 流式：在“尚未向客户端写出任何响应字节（含 headers/body chunk）”之前断开
 
-#### 5.6.1 将 CC Switch proxy_config 融入本地熔断/Failover（开关联动）
+#### 5.6.1 将 CC Switch proxy_config 融入本地熔断/Failover（谨慎：语义混淆风险）
 
-如果你希望在不改模板的情况下“远程开关”本地 failover/熔断，可以复用 CC Switch 的 `proxy_config` 作为控制面（control plane）：
+`proxy_config` 原本是 “CC Switch Proxy” 的配置表。把它复用为 app-proxy 的“运营开关”虽然方便，但语义很容易混淆，常见风险包括：
 
-- `enabled`：作为“是否启用代理”的开关（影响 routeMode 是否允许进入 `app-proxy/ccswitch-proxy`）
-- `auto_failover_enabled`：作为“是否启用 failover/熔断”的开关（影响 `appFailoverEnabled/appBreakerEnabled` 默认值）
+- CC Switch 侧把 `enabled` 当成“控制自己的 proxy”，却意外影响应用内的 proxy/failover
+- 两套系统的操作人员可能不是同一个人，权限与变更流程不同
+
+更推荐的做法（建议）：
+
+- 在 CC Switch 新增独立字段（例如 `app_proxy_enabled`、`app_auto_failover_enabled`），或单独建表 `app_proxy_policy`，明确它控制的是“应用内 proxy/breaker”
+- UI/文档用明确命名展示（避免“开关 CC Switch proxy”与“开关应用代理”混在一起）
+
+如果短期仍需要复用 `proxy_config`（过渡方案），建议至少明确以下映射关系：
+
+- `enabled`：作为“是否允许开启代理”的开关（影响 routeMode 是否允许进入 `app-proxy/ccswitch-proxy`）
+- `auto_failover_enabled`：作为“是否允许启用 failover/熔断”的开关（影响 `appFailoverEnabled/appBreakerEnabled` 默认值）
 - `proxy_enabled`：可作为全局 kill switch（可选）
 
-推荐做法：
-- 默认 `respectCCSwitchProxyConfig=true`
-- 用户在模板里显式写了 `appFailoverEnabled/appBreakerEnabled` 时优先模板；否则跟随 `auto_failover_enabled`
-- 熔断参数（阈值/冷却时间/半开并发等）仍由本地配置决定；如需运营可调，可在 CC Switch 增加 `breaker_*` 字段或单独表
+建议：
 
-> 重要：`proxy_config` 原本是“CC Switch Proxy”的配置表。你复用它去控制 app-proxy 时，需要在 UI/文档上明确这是“Proxy Policy（控制面）”，避免把“是否启用 CC Switch Proxy”误解成“是否启用代理能力”。
+- 不要把该行为默认打开；建议用显式开关 `respectCCSwitchProxyConfig=true` 才启用（生产环境更推荐默认 `false`）
+- 用户在模板里显式写了 `appFailoverEnabled/appBreakerEnabled` 时优先模板；否则才跟随运营开关
+- 熔断参数（阈值/冷却时间/半开并发等）仍由本地配置决定；如需运营可调，建议独立字段/表，而不是继续借用 `proxy_config`
 
 ### 5.7 转发实现要点（避免踩坑）
 
@@ -487,21 +512,14 @@ attempt(provider):
 
 取舍：commit 窗口会让“首字节延迟”变大，但换来“早期故障可无感切换”。
 
-#### 5.7.4 进一步增强（可选）：Hedged Requests（对冲请求）
+#### 5.7.4 不推荐：Hedged Requests（对冲请求）
 
-如果你非常在意“无感”和尾延迟（tail latency），可以做对冲：
+对冲请求在 LLM API 场景下成本极高（可能双倍 token 计费），并且 streaming/SSE 很难在“已开始写出后”真正取消另一个请求以避免计费。
 
-- 先发 provider A；若在 `hedgeDelayMs` 内没有拿到首字节（或没有完成非流式响应），再并发发 provider B；
-- 谁先返回可用结果就选谁，并取消另一个。
+因此：除非你有非常明确的成本/限流/计费控制策略，否则不建议把 Hedged Requests 纳入本方案。若一定要做，请确保：
 
-优点：
-- 对上游偶发抖动更鲁棒，用户更“无感”。
-
-代价：
-- **成本变高**（可能双倍请求/计费）
-- 需要更严格的限流与熔断，避免放大上游压力
-
-一般建议只在：高价值请求、或特定网络环境下开启。
+- 默认关闭，仅对少量高价值请求开启
+- 有严格的并发/速率限制与预算控制，并把成本与命中率做成可观测指标
 
 #### 5.7.5 透传优先：不要做协议转换
 
@@ -554,6 +572,16 @@ attempt(provider):
 - 不在磁盘/终端环境写入真实上游 token（占位即可）
 - 日志对 token 做脱敏（不要输出 header 值）
 - 如担心本机其他进程滥用，可增加一个随机生成的 `proxySecret` 并要求请求携带（例如 query/header），并在 baseURL 中编码或由环境变量注入
+
+### 5.11 热更新与生命周期管理（必须讨论）
+
+真正落地时需要明确“快照变更如何生效”，否则线上会出现“配置变了但进程不认”“请求打到已下线 provider”等问题：
+
+- **快照感知**：CC Switch 快照变化后（provider 增删、开关切换），Proxy 如何感知？轮询（pull）还是订阅（push）？变更延迟要求是什么？
+- **生效边界**：不做“流式中途切换”；建议让**正在进行的请求按旧 policy 跑完**，新的请求再应用新 policy（并记录切换点用于排查）。
+- **队列与 breaker 状态**：provider 新增/删除/排序变化时如何处理已有 breaker 状态（建议按 `providerId` key 做清理与初始化，并记录 warning）。
+- **端口与启动失败**：端口冲突、启动失败时给出明确错误与用户提示；必要时自动选择空闲端口并更新客户端 baseURL。
+- **生命周期**：何时启动/关闭本地 Proxy（随会话启动/全局常驻/空闲超时退出），避免“无会话却占用端口”的问题。
 
 ---
 
@@ -669,8 +697,42 @@ respond 503 (no upstream available)
 
 本仓库当前使用 `useCCSwitchProxy`，历史语义偏向“让客户端直连 CC Switch Proxy”。当你要做“应用内置 proxy”时，建议不要直接复用该字段：
 
- - 推荐：`proxyEnabled=true/false` + `proxyImplementation='app'|'ccswitch'|'off'`（必要时再加 `respectCCSwitchProxyConfig`）
+ - 推荐：`proxyEnabled=true/false` + `proxyImplementation='app'|'ccswitch'|'off'`（谨慎使用 `respectCCSwitchProxyConfig`；更推荐在 CC Switch 增加独立字段；见 5.6.1/第 9 节第 2 点）
 - 或新增：`useAppProxy`，保留 `useCCSwitchProxy` 的原语义（便于兼容旧模板与 UI 文案）
+
+---
+
+## 9. 问题与风险
+
+1. **过度抽象，配置膨胀严重**  
+   `EffectiveProxyPolicy` 类型有 30+ 个字段，模板新增选项有 10 个（4.1.1 节表格）。对一个“代理 + 熔断”功能来说，这个配置面太大了。实际使用时大部分用户只需要：  
+   - 是否走代理  
+   - 队列是什么  
+   - 熔断参数用默认值  
+   建议：先只暴露 2~3 个用户可见选项（例如 `proxyEnabled` + `proxyImplementation`），其余全部用合理默认值内部处理，不作为模板字段。
+
+2. **respectCCSwitchProxyConfig 语义容易混淆**  
+   把 CC Switch Proxy 的配置表（`proxy_config`）复用为 app-proxy 的“运营开关”，文档在 5.6.1 也提到了这个风险。这种“借用别人的字段控制自己的行为”会导致：  
+   - CC Switch 侧改了 `enabled` 本意是控制自己的 proxy，却意外关掉了应用的 proxy  
+   - 两个系统的操作人员可能不是同一个人  
+   建议：如果需要远程开关，应该在 CC Switch 中新增独立字段（如 `app_proxy_enabled`），而非复用现有字段。
+
+3. **队列构建逻辑（5.5.2）中 primary 选择过于复杂**  
+   4 级 fallback（`requestedProviderId → currentProviderId → is_current=true → providers[0]`）增加了排查难度。  
+   建议简化为 2 级：用户指定 > CC Switch current，其余情况直接用队列首位。
+
+4. **缺少热更新和生命周期管理的讨论**  
+   - CC Switch 快照变化后（provider 增删、enabled 开关切换），正在运行的 proxy 如何感知？需要轮询还是推送？  
+   - 队列变更时正在进行的请求如何处理？  
+   - Proxy 端口冲突、启动失败时的错误处理和用户提示  
+   这些是落地时必须解决的问题，但文档之前没有涉及。
+
+5. **多协议兼容性被低估**  
+   5.5.1 提到队列内 provider 需要“同协议、同接口能力、同模型命名”，但只给了“运营约束”这个建议。实际上这是 failover 能否真正“无感”的核心前提条件。如果队列里混入了不兼容的 provider，熔断切换后仍然会失败，用户体验反而更差（连续失败 → 所有 provider 都被熔断 → 完全不可用）。  
+   建议：在队列构建阶段强制校验协议一致性，不兼容的 provider 直接剔除并记录警告。
+
+6. **Hedged Requests（5.7.4）不建议纳入**  
+   对冲请求在 LLM API 场景下成本极高（token 计费是双倍），且流式响应难以取消已产生的计费。放在文档里会给实现者造成“应该做”的暗示。建议删除或明确标注为“不推荐”。
 
 ---
 
