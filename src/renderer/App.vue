@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MenuBar from './components/MenuBar.vue'
 import TabBar from './components/TabBar.vue'
@@ -7,6 +7,7 @@ import Terminal from './components/Terminal.vue'
 import ConfigSelector from './components/ConfigSelector.vue'
 import MonitorPanel from './components/MonitorPanel.vue'
 import RemotePanel from './components/RemotePanel.vue'
+import AgentDock from './components/AgentDock.vue'
 
 const { t } = useI18n()
 
@@ -40,6 +41,18 @@ const activeTabId = ref(null)
 const uiMode = ref(getInitialUiMode()) // shell | monitor
 const monitorThumbnailMode = ref(readMonitorThumbnailMode())
 const monitorDockOpen = ref(false)
+const plannerSessionId = ref('')
+let unsubscribeAgentLog = null
+const AGENT_DOCK_OPEN_KEY = 'mps.agentDock.open'
+const getInitialAgentDockOpen = () => {
+  try {
+    const raw = String(localStorage.getItem(AGENT_DOCK_OPEN_KEY) ?? '').trim().toLowerCase()
+    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false
+  } catch (_) {}
+  return true
+}
+const agentDockOpen = ref(getInitialAgentDockOpen())
+const agentDockHeightCss = computed(() => (agentDockOpen.value ? '260px' : '40px'))
 const showConfigSelector = ref(false)
 const configSelectorMode = ref('create') // create | manage
 const pendingTabId = ref(null)
@@ -66,6 +79,13 @@ const handleMonitorSettings = () => {
   refreshMonitorThumbnailMode()
 }
 
+const toggleAgentDock = () => {
+  agentDockOpen.value = !agentDockOpen.value
+  try {
+    localStorage.setItem(AGENT_DOCK_OPEN_KEY, agentDockOpen.value ? '1' : '0')
+  } catch (_) {}
+}
+
 const VOICE_ARM_DELAY_MS = 1100
 const TRANSCRIPTION_MODEL = 'FunAudioLLM/SenseVoiceSmall'
 
@@ -74,6 +94,24 @@ const activeCwd = computed(() => {
   const cwd = (tab?.workingDir && String(tab.workingDir)) ? String(tab.workingDir) : ''
   return cwd || defaultCwd.value || t('configSelector.userProfile')
 })
+
+const isPlannerSession = (sessionId) => {
+  const sid = typeof sessionId === 'string' ? sessionId.trim() : ''
+  const pid = typeof plannerSessionId.value === 'string' ? plannerSessionId.value.trim() : ''
+  return Boolean(pid) && sid === pid
+}
+
+const workerTabs = computed(() => {
+  const pid = typeof plannerSessionId.value === 'string' ? plannerSessionId.value.trim() : ''
+  if (!pid) return tabs.value
+  return (tabs.value || []).filter((t) => t && t.id !== pid)
+})
+
+const pickFallbackActiveTabId = () => {
+  const list = workerTabs.value || []
+  const nonPending = list.filter((t) => t && !t.pending)
+  return (nonPending[0] || list[0] || null)?.id || null
+}
 
 const voiceButtonText = computed(() => {
   if (isVoicePreparing.value) return t('voice.cancel')
@@ -101,7 +139,7 @@ const closeConfigSelector = () => {
       // 只有当被删除的pending标签页是当前活跃的时，才需要切换活跃标签页
       if (wasActivePending) {
         // 查找上一个活跃的非pending标签页，如果没有则选择任意一个非pending标签页
-        const nonPendingTabs = tabs.value.filter(t => !t.pending)
+        const nonPendingTabs = workerTabs.value.filter(t => !t.pending)
         if (nonPendingTabs.length > 0) {
           // 选择最后一个非pending标签页（通常是用户之前使用的）
           activeTabId.value = nonPendingTabs[nonPendingTabs.length - 1].id
@@ -139,17 +177,14 @@ const applySessionsToTabs = (sessions) => {
     const sid = pendingCreatedSessionId.value
     if (sessionTabs.some((t) => t.id === sid)) {
       tabs.value = tabs.value.filter((t) => !t.pending)
-      activeTabId.value = sid
+      if (!isPlannerSession(sid)) activeTabId.value = sid
       pendingTabId.value = null
       pendingCreatedSessionId.value = null
     }
   }
 
-  const hasActive = tabs.value.some((t) => t.id === activeTabId.value)
-  if (!hasActive) {
-    const firstSession = sessionTabs[0]
-    activeTabId.value = firstSession ? firstSession.id : (pendingTabs[0]?.id || null)
-  }
+  const hasActive = (workerTabs.value || []).some((t) => t && t.id === activeTabId.value)
+  if (!hasActive) activeTabId.value = pickFallbackActiveTabId()
 }
 
 const createTab = async (config, workingDir) => {
@@ -275,7 +310,7 @@ const closeTab = async (tabId) => {
     if (pendingTabId.value === null) pendingCreatedSessionId.value = null
     showConfigSelector.value = false
     if (activeTabId.value === tabId) {
-      activeTabId.value = tabs.value.length > 0 ? tabs.value[0].id : null
+      activeTabId.value = pickFallbackActiveTabId()
     }
     return
   }
@@ -291,6 +326,20 @@ const closeTab = async (tabId) => {
 onMounted(async () => {
   refreshMonitorThumbnailMode()
   window.addEventListener('mps:monitor-settings', handleMonitorSettings)
+
+  if (window?.electronAPI?.agentGetState) {
+    try {
+      const state = await window.electronAPI.agentGetState()
+      plannerSessionId.value = typeof state?.plannerSessionId === 'string' ? state.plannerSessionId : ''
+    } catch (_) {
+      plannerSessionId.value = ''
+    }
+  }
+  if (window?.electronAPI?.onAgentLog) {
+    unsubscribeAgentLog = window.electronAPI.onAgentLog((entry) => {
+      if (typeof entry?.plannerSessionId === 'string') plannerSessionId.value = entry.plannerSessionId
+    })
+  }
 
   await loadConfigTemplates()
   if (window?.electronAPI?.getDefaultCwd) {
@@ -326,18 +375,27 @@ onMounted(async () => {
   }
 
   // Default UX: show config selector only when there are no running sessions.
-  if (tabs.value.filter((t) => !t.pending).length === 0) {
+  if (workerTabs.value.filter((t) => !t.pending).length === 0) {
     showConfigSelector.value = true
   }
 })
 
 onUnmounted(() => {
   window.removeEventListener('mps:monitor-settings', handleMonitorSettings)
+  if (typeof unsubscribeAgentLog === 'function') unsubscribeAgentLog()
+  unsubscribeAgentLog = null
   if (unsubscribeSessionsChanged) {
     unsubscribeSessionsChanged()
     unsubscribeSessionsChanged = null
   }
 })
+
+watch(
+  () => plannerSessionId.value,
+  (sid) => {
+    if (sid && activeTabId.value === sid) activeTabId.value = pickFallbackActiveTabId()
+  }
+)
 
 const clearVoiceTimer = () => {
   if (voicePrepareTimer) {
@@ -629,8 +687,8 @@ const toggleVoiceCapture = () => {
     <MenuBar :mode="uiMode" @changeMode="switchUiMode" @openConfig="openConfigManager" />
 
     <TabBar
-      v-if="uiMode === 'shell' && tabs.length > 0"
-      :tabs="tabs"
+      v-if="uiMode === 'shell' && workerTabs.length > 0"
+      :tabs="workerTabs"
       :activeTabId="activeTabId"
       :activeCwd="activeCwd"
       @update:activeTabId="activeTabId = $event"
@@ -666,7 +724,7 @@ const toggleVoiceCapture = () => {
         v-show="uiMode === 'shell' || (uiMode === 'monitor' && monitorThumbnailMode === 'terminal')"
       >
         <div
-          v-for="tab in tabs"
+          v-for="tab in workerTabs"
           :key="tab.id"
           class="terminal-wrapper"
           :class="{
@@ -695,11 +753,11 @@ const toggleVoiceCapture = () => {
           :defaultCwd="defaultCwd"
           :activeSessionId="activeTabId"
           @close="monitorDockOpen = false"
-          @focus="activeTabId = $event"
-          @open="(id) => { activeTabId = id; monitorDockOpen = false }"
+          @focus="(id) => { if (!isPlannerSession(id)) activeTabId = id }"
+          @open="(id) => { if (!isPlannerSession(id)) activeTabId = id; monitorDockOpen = false }"
         />
 
-        <div v-if="tabs.length === 0 && !showConfigSelector" class="empty-state">
+        <div v-if="workerTabs.length === 0 && !showConfigSelector" class="empty-state">
           <div class="empty-card">
             <div class="empty-icon">⌨️</div>
             <h2>{{ t('app.noActiveTerminals') }}</h2>
@@ -728,6 +786,7 @@ const toggleVoiceCapture = () => {
             <span v-if="voiceError" class="voice-error">{{ voiceError }}</span>
           </div>
         </div>
+
       </div>
 
       <div class="monitor-view" v-show="uiMode === 'monitor'">
@@ -736,8 +795,8 @@ const toggleVoiceCapture = () => {
           :tabs="tabs"
           :defaultCwd="defaultCwd"
           :activeSessionId="activeTabId"
-          @focus="activeTabId = $event"
-          @open="(id) => { activeTabId = id; switchUiMode('shell') }"
+          @focus="(id) => { if (!isPlannerSession(id)) activeTabId = id }"
+          @open="(id) => { if (!isPlannerSession(id)) activeTabId = id; switchUiMode('shell') }"
         />
       </div>
 
@@ -746,6 +805,15 @@ const toggleVoiceCapture = () => {
       </div>
 
     </div>
+
+    <AgentDock
+      v-show="uiMode === 'shell'"
+      :open="agentDockOpen"
+      :tabs="tabs"
+      :activeTabId="activeTabId"
+      :style="{ '--mps-agent-dock-height': agentDockHeightCss }"
+      @toggle="toggleAgentDock"
+    />
   </div>
 </template>
 
@@ -839,8 +907,6 @@ html {
   display: flex;
   flex-direction: column;
   background-color: var(--bg-color);
-  border-bottom-left-radius: var(--radius-lg);
-  border-bottom-right-radius: var(--radius-lg);
 }
 
 .shell-view {

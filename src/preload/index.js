@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateQuitAndInstall: () => ipcRenderer.invoke('update:quitAndInstall'),
   monitorGetStates: () => ipcRenderer.invoke('monitor:getStates'),
   sessionsList: () => ipcRenderer.invoke('sessions:list'),
+  agentGetState: () => ipcRenderer.invoke('agent:getState'),
+  agentClearLogs: () => ipcRenderer.invoke('agent:clearLogs'),
+  agentSetPlanner: (sessionId) => ipcRenderer.invoke('agent:setPlanner', sessionId),
+  agentSend: (payload) => ipcRenderer.invoke('agent:send', payload),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:readText'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
@@ -50,6 +54,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, payload) => callback(payload)
     ipcRenderer.on('monitor:update', handler)
     return () => ipcRenderer.removeListener('monitor:update', handler)
+  },
+  onAgentLog: (callback) => {
+    const handler = (event, payload) => callback(payload)
+    ipcRenderer.on('agent:log', handler)
+    return () => ipcRenderer.removeListener('agent:log', handler)
   },
   onSessionsChanged: (callback) => {
     const handler = (event, payload) => callback(payload)

@@ -335,6 +335,10 @@ electron-builder.json
 
 ## Docs index
 
+- AI orchestration (multi-tab agents):
+  - [doc/PRD_MULTI_TAB_AI_AGENT_ZH.md](doc/PRD_MULTI_TAB_AI_AGENT_ZH.md)
+  - [doc/PRD_MULTI_TAB_AI_AGENT_TODO_ZH.md](doc/PRD_MULTI_TAB_AI_AGENT_TODO_ZH.md)
+  - [doc/PRD_MULTI_TAB_AI_AGENT_PROMPTS_ZH.md](doc/PRD_MULTI_TAB_AI_AGENT_PROMPTS_ZH.md)
 - Terminal view design and trade-offs:
   - [doc/SHELL_MONITORING_SOLUTION.md](doc/SHELL_MONITORING_SOLUTION.md)
   - [doc/MONITOR_CARD_THUMBNAIL_SAVING_ZH.md](doc/MONITOR_CARD_THUMBNAIL_SAVING_ZH.md)

@@ -11,6 +11,17 @@ export default {
     modeMonitor: '视图',
     modeRemote: '远程'
   },
+  agent: {
+    title: '智能体',
+    noPlanner: '未绑定主体AGENT',
+    bindActive: '绑定当前TAB',
+    clear: '清空',
+    collapse: '收起',
+    expand: '展开',
+    send: '发送',
+    placeholder: '给主体AGENT发送指令（Ctrl+Enter）…',
+    empty: '暂无输出。'
+  },
   remote: {
     title: '远程访问',
     remoteAppEnabled: '启用 RemoteApp 快捷入口',

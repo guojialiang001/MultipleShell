@@ -11,6 +11,17 @@ export default {
     modeMonitor: 'View',
     modeRemote: 'Remote'
   },
+  agent: {
+    title: 'Agent',
+    noPlanner: 'No Main Agent bound',
+    bindActive: 'Bind active tab',
+    clear: 'Clear',
+    collapse: 'Collapse',
+    expand: 'Expand',
+    send: 'Send',
+    placeholder: 'Send instruction to Main Agent (Ctrl+Enter)…',
+    empty: 'No agent output yet.'
+  },
   remote: {
     title: 'Remote Access',
     remoteAppEnabled: 'Enable RemoteApp shortcut',

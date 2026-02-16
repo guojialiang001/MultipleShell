@@ -4,6 +4,8 @@ const { RULES_BY_TYPE, ERROR_PATTERNS, ERROR_EXCLUDE_PATTERNS } = require('./she
 const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g
 const PROMPT_MARKER = '__MPS_PROMPT__'
 const CWD_MARKER = '__MPS_CWD__'
+const TOOL_MARKER = '__MPS_TOOL__'
+const TOOL_RESULT_MARKER = '__MPS_TOOL_RESULT__'
 
 const stripAnsi = (value) => String(value || '').replace(ANSI_RE, '')
 
@@ -26,7 +28,12 @@ class ShellMonitor extends EventEmitter {
     const value = String(line || '').trim()
     if (!value) return false
     const upper = value.toUpperCase()
-    return upper.startsWith(PROMPT_MARKER) || upper.startsWith(CWD_MARKER)
+    return (
+      upper.startsWith(PROMPT_MARKER) ||
+      upper.startsWith(CWD_MARKER) ||
+      upper.startsWith(TOOL_MARKER) ||
+      upper.startsWith(TOOL_RESULT_MARKER)
+    )
   }
 
   truncateLine(line) {

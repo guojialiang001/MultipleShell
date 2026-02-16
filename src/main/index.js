@@ -10,6 +10,7 @@ const ccSwitch = require('./ccswitch')
 const draftManager = require('./draft-manager')
 const ptyManager = require('./pty-manager')
 const shellMonitor = require('./shell-monitor')
+const { createOrchestratorService } = require('./orchestrator-service')
 const { initAgent } = require('./agent')
 
 
@@ -220,7 +221,7 @@ const transcribeAudio = async ({ audioData, format = 'webm' }) => {
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
-    height: 800,
+    height: 920,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -308,6 +309,139 @@ const forwardHostNotification = (method, params) => {
   if (method === 'sessions.changed') return sendToRenderer('sessions:changed', params)
   if (method === 'monitor.update') return sendToRenderer('monitor:update', params)
   if (method === 'update.status') return sendToRenderer('update:status', params)
+  if (method === 'agent.log') return sendToRenderer('agent:log', params)
+}
+
+let orchestrator = null
+const AGENT_LOG_LIMIT = 400
+let agentLogSeq = 1
+let plannerSessionId = ''
+const agentLogs = []
+
+const makeAgentLogId = () => `a${Date.now().toString(36)}_${(agentLogSeq++).toString(36)}`
+
+const summarizeToolParams = (method, params) => {
+  const m = typeof method === 'string' ? method.trim() : ''
+  const p = params && typeof params === 'object' && !Array.isArray(params) ? params : {}
+
+  if (m === 'tabs.send') {
+    const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : ''
+    const sessionIds = Array.isArray(p.sessionIds) ? p.sessionIds.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 10) : []
+    const enter = p.enter == null ? true : Boolean(p.enter)
+    const text = typeof p.text === 'string' ? clampText(p.text, 240) : ''
+    return { sessionId, sessionIds, enter, text }
+  }
+
+  if (m === 'tabs.create') {
+    const configId = typeof p.configId === 'string' ? p.configId.trim() : ''
+    const workingDir = typeof p.workingDir === 'string' ? clampText(p.workingDir.trim(), 200) : ''
+    const title = typeof p.title === 'string' ? clampText(p.title.trim(), 120) : ''
+    return { configId, workingDir, title }
+  }
+
+  if (m === 'tabs.kill' || m === 'tabs.destroy') {
+    const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : ''
+    return { sessionId }
+  }
+
+  if (m === 'monitor.getState') {
+    const sessionId = typeof p.sessionId === 'string' ? p.sessionId.trim() : ''
+    return { sessionId }
+  }
+
+  return {}
+}
+
+const summarizeToolResult = (method, result) => {
+  const m = typeof method === 'string' ? method.trim() : ''
+  const r = result && typeof result === 'object' && !Array.isArray(result) ? result : {}
+
+  if (m === 'configs.list') {
+    const count = Array.isArray(r.configs) ? r.configs.length : 0
+    return { configCount: count }
+  }
+
+  if (m === 'tabs.list' || m === 'sessions.list') {
+    const count = Array.isArray(r.sessions) ? r.sessions.length : 0
+    return { sessionCount: count }
+  }
+
+  if (m === 'tabs.create') {
+    return { sessionId: typeof r.sessionId === 'string' ? r.sessionId : '' }
+  }
+
+  if (m === 'tabs.kill' || m === 'tabs.destroy') {
+    return { ok: Boolean(r.ok) }
+  }
+
+  if (m === 'tabs.send') {
+    return { sent: typeof r.sent === 'number' ? r.sent : null }
+  }
+
+  if (m === 'monitor.getStates') {
+    const states = Array.isArray(r.states) ? r.states : []
+    const stats = { starting: 0, running: 0, idle: 0, completed: 0, stuck: 0, error: 0, stopped: 0 }
+    for (const s of states) {
+      const st = typeof s?.status === 'string' ? s.status : ''
+      if (stats[st] == null) continue
+      stats[st] += 1
+    }
+    return { sessionCount: states.length, stats }
+  }
+
+  if (m === 'monitor.getState') {
+    const state = r.state && typeof r.state === 'object' ? r.state : null
+    const status = typeof state?.status === 'string' ? state.status : ''
+    return { status: status || null }
+  }
+
+  return null
+}
+
+const emitAgentLog = (entry) => {
+  sendToRenderer('agent:log', entry)
+  if (agent && agent.role === 'host') {
+    try {
+      agent.broadcast('agent.log', entry)
+    } catch (_) {}
+  }
+}
+
+const pushAgentLog = (patch) => {
+  const entry = {
+    id: makeAgentLogId(),
+    ts: new Date().toISOString(),
+    plannerSessionId,
+    ...patch
+  }
+
+  agentLogs.push(entry)
+  while (agentLogs.length > AGENT_LOG_LIMIT) agentLogs.shift()
+  emitAgentLog(entry)
+  return entry
+}
+
+const clearAgentLogs = () => {
+  agentLogs.length = 0
+  emitAgentLog({
+    id: makeAgentLogId(),
+    ts: new Date().toISOString(),
+    plannerSessionId,
+    type: 'clear'
+  })
+}
+
+const setPlannerSessionId = (sessionId, source = '') => {
+  const next = typeof sessionId === 'string' ? sessionId.trim() : ''
+  if (!next) return false
+  if (plannerSessionId === next) return false
+  plannerSessionId = next
+  pushAgentLog({
+    type: 'planner',
+    sessionId: next,
+    message: `planner=${next}${source ? ` (${source})` : ''}`
+  })
+  return true
 }
 
 const sendFromHostPty = (channel, payload) => {
@@ -319,13 +453,283 @@ const sendFromHostPty = (channel, payload) => {
     if (channel === 'terminal:exit') agent.broadcast('terminal.exit', payload)
   }
 
+  if (channel === 'terminal:data') {
+    const sid = payload?.sessionId
+    const data = payload?.data
+    if (orchestrator && typeof orchestrator.onTerminalData === 'function') {
+      orchestrator.onTerminalData(sid, data).catch((err) => {
+        console.warn('[mps] Orchestrator tool-call failed:', err)
+      })
+    }
+  }
+
   if (channel === 'terminal:exit') {
     const sid = payload?.sessionId
     if (typeof sid === 'string' && sid) {
+      try {
+        orchestrator?.onTerminalExit?.(sid)
+      } catch (_) {}
       if (sessionRegistry.delete(sid)) broadcastSessionsChanged()
     }
   }
 }
+
+function clampText(value, max = 2000) {
+  const text = String(value || '')
+  const m = Number(max)
+  if (!Number.isFinite(m) || m <= 0) return ''
+  if (text.length <= m) return text
+  if (m <= 3) return text.slice(0, m)
+  return text.slice(0, m - 3) + '...'
+}
+
+const isHighRiskSendText = (text) => {
+  const t = String(text || '').toLowerCase()
+  if (!t.trim()) return false
+  const patterns = [
+    /\brm\s+-rf\b/,
+    /\brmdir\b.*\s\/s\b/,
+    /\brd\b.*\s\/s\b/,
+    /\bdel\b.*\s\/s\b/,
+    /\bformat\s+[a-z]:/,
+    /\bdiskpart\b/,
+    /\bshutdown\b/,
+    /\bstop-computer\b/,
+    /\brestart-computer\b/,
+    /\bremove-item\b.*\s-recurse\b.*\s-force\b/,
+    /\breg\s+delete\b/,
+    /\bbcdedit\b/
+  ]
+  return patterns.some((re) => re.test(t))
+}
+
+const confirmHighRiskSend = async (details) => {
+  if (process.env.MPS_DISABLE_ORCHESTRATOR_CONFIRM === '1') return true
+  if (process.env.MPS_SUPPRESS_DIALOGS === '1') {
+    const err = new Error('Dialogs suppressed; blocked high-risk tabs.send')
+    err.code = 'DIALOGS_SUPPRESSED'
+    throw err
+  }
+
+  const target = String(details?.target || '').trim()
+  const snippet = clampText(details?.text || '', 600)
+  const res = await dialog.showMessageBox({
+    type: 'warning',
+    buttons: ['Cancel', 'Send'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: 'Confirm high-risk command send',
+    message: 'A Planner (Main Agent) requested sending a high-risk command to a tab.',
+    detail: `Target: ${target || '(unknown)'}\n\nCommand:\n${snippet}`
+  })
+  return res?.response === 1
+}
+
+orchestrator = createOrchestratorService({
+  onEvent: (evt) => {
+    if (!evt || typeof evt !== 'object') return
+    if (evt.type === 'tool_call') {
+      setPlannerSessionId(evt.sessionId, 'tool_call')
+      pushAgentLog({
+        type: 'tool_call',
+        sessionId: evt.sessionId,
+        toolId: evt.id,
+        method: evt.method,
+        params: summarizeToolParams(evt.method, evt.params),
+        message: `${evt.method} (${evt.id})`
+      })
+      return
+    }
+
+    if (evt.type === 'tool_result') {
+      pushAgentLog({
+        type: 'tool_result',
+        sessionId: evt.sessionId,
+        toolId: evt.id,
+        method: evt.method,
+        ok: Boolean(evt.ok),
+        result: evt.ok ? summarizeToolResult(evt.method, evt.result) : null,
+        error: !evt.ok ? evt.error : null,
+        message: `${evt.ok ? 'ok' : 'error'} ${evt.method} (${evt.id})`
+      })
+    }
+  },
+  writeToSession: (sessionId, data) => {
+    const sid = typeof sessionId === 'string' ? sessionId.trim() : ''
+    if (!sid) return
+    if (typeof data !== 'string' || !data) return
+    try {
+      shellMonitor.onUserInput(sid, data)
+    } catch (_) {}
+    ptyManager.writeToSession(sid, data)
+  },
+  dispatch: async ({ id, method, params }) => {
+    const safeMethod = typeof method === 'string' ? method.trim() : ''
+    const p = params && typeof params === 'object' && !Array.isArray(params) ? params : {}
+
+    if (safeMethod === 'tools.list') {
+      return {
+        tools: [
+          { method: 'tools.list', params: {}, description: 'List available orchestrator tools.' },
+          { method: 'configs.list', params: {}, description: 'List available config templates (safe summary only).' },
+          { method: 'tabs.list', params: {}, description: 'List existing tabs/sessions.' },
+          { method: 'tabs.create', params: { configId: '...', workingDir: '', title: '' }, description: 'Create a new tab from an existing config template.' },
+          { method: 'tabs.kill', params: { sessionId: '...' }, description: 'Kill/destroy a tab/session.' },
+          { method: 'tabs.send', params: { sessionId: '...', text: '...', enter: true }, description: 'Send text to a tab (optionally press Enter).' },
+          { method: 'monitor.getStates', params: {}, description: 'Get monitor states for all sessions.' },
+          { method: 'monitor.getState', params: { sessionId: '...' }, description: 'Get monitor state for one session.' }
+        ]
+      }
+    }
+
+    if (safeMethod === 'configs.list') {
+      const list = configManager.loadConfigs()
+      return {
+        configs: (Array.isArray(list) ? list : []).map((cfg) => ({
+          id: typeof cfg?.id === 'string' ? cfg.id : '',
+          type: typeof cfg?.type === 'string' ? cfg.type : '',
+          name: typeof cfg?.name === 'string' ? cfg.name : ''
+        }))
+      }
+    }
+
+    if (safeMethod === 'tabs.list' || safeMethod === 'sessions.list') {
+      return { sessions: getSessionsList() }
+    }
+
+    if (safeMethod === 'tabs.create') {
+      const configId = typeof p?.configId === 'string' ? p.configId.trim() : ''
+      if (!configId) throw new Error('tabs.create requires configId')
+
+      const workingDir = typeof p?.workingDir === 'string' ? p.workingDir.trim() : ''
+      if (workingDir && !isPathSafe(workingDir)) {
+        const err = new Error('Unsafe workingDir')
+        err.code = 'UNSAFE_WORKDIR'
+        throw err
+      }
+
+      const configs = configManager.loadConfigs()
+      const cfg = (Array.isArray(configs) ? configs : []).find((c) => String(c?.id || '').trim() === configId)
+      if (!cfg) {
+        const err = new Error(`Config not found: ${configId}`)
+        err.code = 'CONFIG_NOT_FOUND'
+        throw err
+      }
+
+      const title = typeof p?.title === 'string' ? p.title.trim() : ''
+      const sessionId = await ptyManager.createSession(cfg, workingDir, sendFromHostPty)
+      sessionRegistry.set(sessionId, {
+        sessionId,
+        title: title || (typeof cfg?.name === 'string' ? cfg.name : 'Unnamed'),
+        config: {
+          id: typeof cfg?.id === 'string' ? cfg.id : '',
+          type: typeof cfg?.type === 'string' ? cfg.type : '',
+          name: typeof cfg?.name === 'string' ? cfg.name : ''
+        },
+        workingDir: workingDir || '',
+        createdAt: new Date().toISOString()
+      })
+      broadcastSessionsChanged()
+      return { sessionId }
+    }
+
+    if (safeMethod === 'tabs.kill' || safeMethod === 'tabs.destroy') {
+      const sessionId = typeof p?.sessionId === 'string' ? p.sessionId.trim() : ''
+      if (!sessionId) throw new Error('tabs.kill requires sessionId')
+      ptyManager.killSession(sessionId)
+      if (sessionRegistry.delete(sessionId)) broadcastSessionsChanged()
+      return { ok: true }
+    }
+
+    if (safeMethod === 'tabs.send') {
+      const text = typeof p?.text === 'string' ? p.text : ''
+      if (!text) throw new Error('tabs.send requires text')
+      if (text.length > 64 * 1024) {
+        const err = new Error('tabs.send text too large')
+        err.code = 'TEXT_TOO_LARGE'
+        throw err
+      }
+
+      const enter = p?.enter == null ? true : Boolean(p.enter)
+      const sessionId = typeof p?.sessionId === 'string' ? p.sessionId.trim() : ''
+      const sessionIds = Array.isArray(p?.sessionIds) ? p.sessionIds : []
+
+      const targets = new Set()
+      if (sessionId) targets.add(sessionId)
+      for (const id of sessionIds) {
+        const sid = typeof id === 'string' ? id.trim() : ''
+        if (sid) targets.add(sid)
+      }
+      if (targets.size === 0) throw new Error('tabs.send requires sessionId or sessionIds')
+
+      for (const sid of Array.from(targets)) {
+        if (!sessionRegistry.has(sid)) {
+          const err = new Error(`Session not found: ${sid}`)
+          err.code = 'SESSION_NOT_FOUND'
+          throw err
+        }
+      }
+
+      if (isHighRiskSendText(text)) {
+        pushAgentLog({
+          type: 'risk_confirm',
+          sessionId: plannerSessionId,
+          toolId: typeof id === 'string' ? id : '',
+          method: 'tabs.send',
+          message: 'high-risk tabs.send requires confirmation',
+          params: summarizeToolParams('tabs.send', { ...p, text })
+        })
+
+        const targetLabel = Array.from(targets)
+          .map((sid) => {
+            const title = String(sessionRegistry.get(sid)?.title || '').trim()
+            return title ? `${sid} (${title})` : sid
+          })
+          .join(', ')
+
+        const ok = await confirmHighRiskSend({ target: targetLabel, text })
+        if (!ok) {
+          pushAgentLog({
+            type: 'risk_blocked',
+            sessionId: plannerSessionId,
+            toolId: typeof id === 'string' ? id : '',
+            method: 'tabs.send',
+            message: 'high-risk tabs.send canceled by user'
+          })
+          const err = new Error('User canceled high-risk tabs.send')
+          err.code = 'USER_CANCELED'
+          throw err
+        }
+      }
+
+      const suffix = enter ? '\r' : ''
+      const payload = `${text}${suffix}`
+      let sent = 0
+      for (const sid of Array.from(targets)) {
+        shellMonitor.onUserInput(sid, payload)
+        ptyManager.writeToSession(sid, payload)
+        sent += 1
+      }
+      return { sent }
+    }
+
+    if (safeMethod === 'monitor.getStates') {
+      return { states: shellMonitor.getAllStates() }
+    }
+
+    if (safeMethod === 'monitor.getState') {
+      const sessionId = typeof p?.sessionId === 'string' ? p.sessionId.trim() : ''
+      if (!sessionId) throw new Error('monitor.getState requires sessionId')
+      const state = shellMonitor.getAllStates().find((s) => s.sessionId === sessionId) || null
+      return { state }
+    }
+
+    const err = new Error(`Unknown tool method: ${safeMethod || '(empty)'}`)
+    err.code = 'UNKNOWN_METHOD'
+    throw err
+  }
+})
 
 shellMonitor.on('update', (payload) => {
   sendToRenderer('monitor:update', payload)
@@ -409,6 +813,57 @@ app.whenReady().then(async () => {
 
       if (method === 'sessions.list') return getSessionsList()
       if (method === 'monitor.getStates') return shellMonitor.getAllStates()
+
+      if (method === 'agent.getState') {
+        return { plannerSessionId, logs: agentLogs }
+      }
+      if (method === 'agent.clearLogs') {
+        clearAgentLogs()
+        return { ok: true }
+      }
+      if (method === 'agent.setPlanner') {
+        const sid = typeof params?.sessionId === 'string' ? params.sessionId.trim() : ''
+        if (!sid) throw new Error('Invalid sessionId')
+        if (!sessionRegistry.has(sid)) {
+          const err = new Error(`Session not found: ${sid}`)
+          err.code = 'SESSION_NOT_FOUND'
+          throw err
+        }
+        setPlannerSessionId(sid, 'remote')
+        return { plannerSessionId }
+      }
+      if (method === 'agent.send') {
+        const text = typeof params?.text === 'string' ? params.text : ''
+        const enter = params?.enter == null ? true : Boolean(params.enter)
+        const targetSessionId = typeof params?.sessionId === 'string' ? params.sessionId.trim() : ''
+
+        if (!text.trim()) throw new Error('agent.send requires text')
+        const sid = targetSessionId || plannerSessionId
+        if (!sid) {
+          const err = new Error('Planner not set')
+          err.code = 'PLANNER_NOT_SET'
+          throw err
+        }
+        if (!sessionRegistry.has(sid)) {
+          const err = new Error(`Session not found: ${sid}`)
+          err.code = 'SESSION_NOT_FOUND'
+          throw err
+        }
+
+        const suffix = enter ? '\r' : ''
+        const data = `${text}${suffix}`
+        shellMonitor.onUserInput(sid, data)
+        ptyManager.writeToSession(sid, data)
+
+        pushAgentLog({
+          type: 'planner_send',
+          sessionId: sid,
+          message: clampText(text, 240),
+          params: { enter }
+        })
+
+        return { ok: true }
+      }
 
       if (method === 'configs.list') return configManager.loadConfigs()
       if (method === 'configs.save') {
@@ -639,6 +1094,74 @@ ipcMain.handle('monitor:getStates', () => {
 ipcMain.handle('sessions:list', () => {
   if (agent && agent.role === 'client') return agent.call('sessions.list', {})
   return getSessionsList()
+})
+
+ipcMain.handle('agent:getState', () => {
+  if (agent && agent.role === 'client') return agent.call('agent.getState', {})
+  return { plannerSessionId, logs: agentLogs }
+})
+
+ipcMain.handle('agent:clearLogs', () => {
+  if (agent && agent.role === 'client') return agent.call('agent.clearLogs', {})
+  clearAgentLogs()
+  return { ok: true }
+})
+
+ipcMain.handle('agent:setPlanner', (_event, sessionId) => {
+  const sid = typeof sessionId === 'string' ? sessionId.trim() : ''
+  if (agent && agent.role === 'client') return agent.call('agent.setPlanner', { sessionId: sid })
+  if (!sid) throw new Error('Invalid sessionId')
+  if (!sessionRegistry.has(sid)) {
+    const err = new Error(`Session not found: ${sid}`)
+    err.code = 'SESSION_NOT_FOUND'
+    throw err
+  }
+  setPlannerSessionId(sid, 'manual')
+  return { plannerSessionId }
+})
+
+ipcMain.handle('agent:send', (_event, payload) => {
+  const input =
+    typeof payload === 'string'
+      ? { text: payload }
+      : payload && typeof payload === 'object'
+      ? payload
+      : {}
+
+  const text = typeof input.text === 'string' ? input.text : ''
+  const enter = input.enter == null ? true : Boolean(input.enter)
+  const targetSessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : ''
+
+  if (agent && agent.role === 'client') {
+    return agent.call('agent.send', { sessionId: targetSessionId, text, enter })
+  }
+
+  if (!text.trim()) throw new Error('agent.send requires text')
+  const sid = targetSessionId || plannerSessionId
+  if (!sid) {
+    const err = new Error('Planner not set')
+    err.code = 'PLANNER_NOT_SET'
+    throw err
+  }
+  if (!sessionRegistry.has(sid)) {
+    const err = new Error(`Session not found: ${sid}`)
+    err.code = 'SESSION_NOT_FOUND'
+    throw err
+  }
+
+  const suffix = enter ? '\r' : ''
+  const data = `${text}${suffix}`
+  shellMonitor.onUserInput(sid, data)
+  ptyManager.writeToSession(sid, data)
+
+  pushAgentLog({
+    type: 'planner_send',
+    sessionId: sid,
+    message: clampText(text, 240),
+    params: { enter }
+  })
+
+  return { ok: true }
 })
 
 const FORBIDDEN_PATHS = [
