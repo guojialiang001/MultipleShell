@@ -31,28 +31,18 @@ const readMonitorThumbnailMode = () => {
 const getInitialUiMode = () => {
   try {
     const saved = localStorage.getItem(UI_MODE_STORAGE_KEY)
-    if (saved === 'shell' || saved === 'monitor' || saved === 'remote') return saved
+    if (saved === 'shell' || saved === 'monitor' || saved === 'remote' || saved === 'agent') return saved
   } catch (_) {}
   return 'shell'
 }
 
 const tabs = ref([])
 const activeTabId = ref(null)
-const uiMode = ref(getInitialUiMode()) // shell | monitor
+const uiMode = ref(getInitialUiMode()) // shell | monitor | remote | agent
 const monitorThumbnailMode = ref(readMonitorThumbnailMode())
 const monitorDockOpen = ref(false)
 const plannerSessionId = ref('')
 let unsubscribeAgentLog = null
-const AGENT_DOCK_OPEN_KEY = 'mps.agentDock.open'
-const getInitialAgentDockOpen = () => {
-  try {
-    const raw = String(localStorage.getItem(AGENT_DOCK_OPEN_KEY) ?? '').trim().toLowerCase()
-    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false
-  } catch (_) {}
-  return true
-}
-const agentDockOpen = ref(getInitialAgentDockOpen())
-const agentDockHeightCss = computed(() => (agentDockOpen.value ? '260px' : '40px'))
 const showConfigSelector = ref(false)
 const configSelectorMode = ref('create') // create | manage
 const pendingTabId = ref(null)
@@ -77,13 +67,6 @@ const refreshMonitorThumbnailMode = () => {
 
 const handleMonitorSettings = () => {
   refreshMonitorThumbnailMode()
-}
-
-const toggleAgentDock = () => {
-  agentDockOpen.value = !agentDockOpen.value
-  try {
-    localStorage.setItem(AGENT_DOCK_OPEN_KEY, agentDockOpen.value ? '1' : '0')
-  } catch (_) {}
 }
 
 const VOICE_ARM_DELAY_MS = 1100
@@ -280,14 +263,20 @@ const openConfigManager = () => {
 }
 
 const switchUiMode = (nextMode) => {
-  const normalized = nextMode === 'monitor' ? 'monitor' : nextMode === 'remote' ? 'remote' : 'shell'
+  const normalized = nextMode === 'monitor'
+    ? 'monitor'
+    : nextMode === 'remote'
+      ? 'remote'
+      : nextMode === 'agent'
+        ? 'agent'
+        : 'shell'
   if (uiMode.value === normalized) return
   uiMode.value = normalized
   if (normalized !== 'shell') monitorDockOpen.value = false
   try {
     localStorage.setItem(UI_MODE_STORAGE_KEY, normalized)
   } catch (_) {}
-  if (normalized === 'shell' || (normalized === 'monitor' && monitorThumbnailMode.value === 'terminal')) {
+  if (normalized === 'shell' || normalized === 'agent' || (normalized === 'monitor' && monitorThumbnailMode.value === 'terminal')) {
     nextTick(() => {
       try {
         window.dispatchEvent(new Event('resize'))
@@ -687,7 +676,7 @@ const toggleVoiceCapture = () => {
     <MenuBar :mode="uiMode" @changeMode="switchUiMode" @openConfig="openConfigManager" />
 
     <TabBar
-      v-if="uiMode === 'shell' && workerTabs.length > 0"
+      v-if="workerTabs.length > 0"
       :tabs="workerTabs"
       :activeTabId="activeTabId"
       :activeCwd="activeCwd"
@@ -804,16 +793,11 @@ const toggleVoiceCapture = () => {
         <RemotePanel />
       </div>
 
-    </div>
+      <div class="agent-view" v-show="uiMode === 'agent'">
+        <AgentDock variant="page" :open="true" :tabs="tabs" :activeTabId="activeTabId" />
+      </div>
 
-    <AgentDock
-      v-show="uiMode === 'shell'"
-      :open="agentDockOpen"
-      :tabs="tabs"
-      :activeTabId="activeTabId"
-      :style="{ '--mps-agent-dock-height': agentDockHeightCss }"
-      @toggle="toggleAgentDock"
-    />
+    </div>
   </div>
 </template>
 
@@ -901,7 +885,8 @@ html {
 
 .shell-view,
 .monitor-view,
-.remote-view {
+.remote-view,
+.agent-view {
   flex: 1;
   min-height: 0;
   display: flex;

@@ -4,12 +4,28 @@
 
 > 适用范围：`PRD_MULTI_TAB_AI_AGENT_ZH.md` 的 MVP 形态（Planner TAB + Tool-Call）。
 
+## 0) 主任务主管（语音录入下方）说明（新增）
+
+MultipleShell 在「语音录入（语音输入）条」下方延长一个 **主任务主管（Supervisor Dock）** 区域，用于把多 TAB + 多 CLI 的协作集中到同一处完成：
+
+- **TAB 编排**：可创建/管理 Planner 与多个 Worker TAB，并在主管区看到它们的状态与最近输出。
+- **三大类 CLI 分工**：可按需唤起并混用三类 AI CLI（Claude Code / Codex / OpenCode）进行分工编程（规划/实现/测试/文档/评审等）。
+- **延长区 UI 必备元素**：文字输入、状态文字、内容展示（计划/关键产出/阻塞点），以及工具日志/风控日志。
+
+为了让 UI 稳定展示，建议 Planner/Worker 遵循以下输出约定：
+
+- **状态文字**：用单行 `【状态】...` 描述当前阶段（planning / executing / waiting / done）与阻塞点（若有）。
+- **内容展示**：用 Markdown 结构输出并可重复更新：`## Plan / ## Workers / ## Next / ## Risks / ## Deliverables`。
+- **工具调用**：仍严格遵循 `__MPS_TOOL__ ...` 单行协议；在输出 `__MPS_TOOL__` 的那一刻不要夹带任何其它文字/状态行。
+
 ## 1) Main Agent（主体AGENT / Planner TAB）提示词
 
 将下面这段作为你在 Planner TAB 里运行的 AI CLI 的“系统提示词/启动提示词/第一条消息”（视工具支持而定）：
 
 ```
 你是 MultipleShell 的 Planner（主体AGENT / Main Agent）。你的目标是：把用户目标拆解为可并行的子任务，创建/管理多个 Worker TAB，并持续监控进度，直到产出可交付结果与最终汇总。
+
+你位于 UI 的“主任务主管（语音录入下方）”里工作：用户的输入可能来自语音转写填充或文字输入。你需要在关键阶段用单行【状态】... 更新你的当前阶段，并用 Markdown 结构维护可展示的计划与进度（便于内容展示区呈现）。
 
 你拥有一组“工具调用协议”（Tool-Call），用于让 Host 执行 TAB/监控相关操作：
 
@@ -63,6 +79,7 @@
 - 你不直接要求用户频繁切 TAB；你通过 tabs.create/tabs.send/monitor.getStates 做编排。
 - 你不假设能读取完整终端日志：监控仅提供 lastLines（有限行数）。需要更多信息时，优先让对应 Worker 在其 TAB 内总结后再汇报。
 - 每个 Worker TAB 只承担一个明确角色：Executor / Tester / Doc / Reviewer 等。
+- 三大类 CLI 的分工方式：优先使用 configs.list 返回的 config.type 来选择合适模板（例如：claude-code / codex / opencode），并把不同角色分派到不同 TAB（可按用户偏好调整）。
 - 所有外部副作用（写盘/删除/格式化/注册表/系统设置等）都必须先解释风险并尽量要求用户确认；对高风险命令尽量让用户手动执行或分步执行。
 
 开始工作前：
@@ -96,6 +113,34 @@
 约束：不要编造；引用来自 Planner/Executor/Tester 的事实；给出可复制的验证步骤。
 ```
 
+### Worker 汇报格式（建议）
+
+为便于 Planner 汇总到“主任务主管”的内容展示区，建议 Worker 完成阶段性工作后按以下结构输出（可复制粘贴）：
+
+```
+【状态】<running|blocked|done> - <一句话结论>
+
+## Done
+- ...
+
+## Result
+- ...
+
+## Next
+- ...
+
+## Blockers
+- ...
+```
+
+## 2.1) 三大类 CLI 分工建议（可选）
+
+> 说明：实际以 `configs.list` 返回的模板为准；下面仅是“怎么分工更顺滑”的经验模板。
+
+- **Claude Code**：更适合规划/评审/复杂问题拆解/风险提示（常用作 Planner 或 Reviewer）。
+- **Codex**：更适合仓库内实现/重构/命令驱动的迭代（常用作 Executor）。
+- **OpenCode**：更适合辅助查阅/对比/文档整理/轻量任务（常用作 Doc 或辅助 Worker）。
+
 ## 3) Tool-Call 示例（可直接用）
 
 列出模板：
@@ -118,3 +163,11 @@
 
 `__MPS_TOOL__ {"id":"t5","method":"tabs.kill","params":{"sessionId":"<SESSION_ID>"}}`
 
+创建三类 CLI 的分工 TAB（示例，需先从 configs.list 找到对应 configId）：
+
+- Reviewer（Claude Code）：
+  `__MPS_TOOL__ {"id":"t6","method":"tabs.create","params":{"configId":"<CLAUDE_CONFIG_ID>","title":"Reviewer (Claude)"}}`
+- Executor（Codex）：
+  `__MPS_TOOL__ {"id":"t7","method":"tabs.create","params":{"configId":"<CODEX_CONFIG_ID>","title":"Executor (Codex)"}}`
+- Doc（OpenCode）：
+  `__MPS_TOOL__ {"id":"t8","method":"tabs.create","params":{"configId":"<OPENCODE_CONFIG_ID>","title":"Doc (OpenCode)"}}`

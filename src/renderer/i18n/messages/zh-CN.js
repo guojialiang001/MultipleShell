@@ -9,6 +9,7 @@ export default {
     language: '语言',
     modeShell: '终端',
     modeMonitor: '视图',
+    modeAgent: '智能体',
     modeRemote: '远程'
   },
   agent: {

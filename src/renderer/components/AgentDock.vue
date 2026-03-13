@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import Terminal from './Terminal.vue'
 
 const props = defineProps({
+  variant: { type: String, default: 'dock' }, // dock | page
   open: { type: Boolean, default: true },
   tabs: { type: Array, default: () => [] },
   activeTabId: { type: [String, null], default: null }
@@ -45,6 +46,7 @@ const plannerLabel = computed(() => {
   return title ? `${title} (${sid})` : sid
 })
 
+const isOpen = computed(() => (props.variant === 'page' ? true : props.open))
 const canBindToActive = computed(() => Boolean(props.activeTabId))
 const canSend = computed(() => Boolean(String(inputText.value || '').trim()))
 
@@ -156,7 +158,7 @@ onUnmounted(() => {
 })
 
 watch(
-  () => props.open,
+  () => isOpen.value,
   async (open) => {
     if (open) await scrollOutputToBottom()
   }
@@ -164,7 +166,7 @@ watch(
 </script>
 
 <template>
-  <div class="agent-dock" :class="{ 'agent-dock--open': open }">
+  <div class="agent-dock" :class="{ 'agent-dock--open': isOpen, 'agent-dock--page': props.variant === 'page' }">
     <div class="agent-header">
       <div class="agent-title">
         {{ t('agent.title') }}
@@ -178,13 +180,18 @@ watch(
         <button class="agent-btn" type="button" @click="clearLogs">
           {{ t('agent.clear') }}
         </button>
-        <button class="agent-btn agent-btn--toggle" type="button" @click="emit('toggle')">
-          {{ open ? t('agent.collapse') : t('agent.expand') }}
+        <button
+          v-if="props.variant !== 'page'"
+          class="agent-btn agent-btn--toggle"
+          type="button"
+          @click="emit('toggle')"
+        >
+          {{ isOpen ? t('agent.collapse') : t('agent.expand') }}
         </button>
       </div>
     </div>
 
-    <div v-show="open" class="agent-body">
+    <div v-show="isOpen" class="agent-body">
       <div class="agent-panels">
         <div class="agent-panel agent-panel--dialog">
           <Terminal v-if="plannerSessionId" class="agent-terminal" :sessionId="plannerSessionId" :isActive="false" />
@@ -231,6 +238,12 @@ watch(
   background: var(--surface-color);
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+.agent-dock--page {
+  flex: 1;
+  height: auto;
   min-height: 0;
 }
 

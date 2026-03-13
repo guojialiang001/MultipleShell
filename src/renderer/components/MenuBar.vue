@@ -446,6 +446,14 @@ const syncUpdateState = (payload) => {
         <button
           class="mode-btn"
           type="button"
+          :class="{ active: props.mode === 'agent' }"
+          @click="setMode('agent')"
+        >
+          {{ t('menu.modeAgent') }}
+        </button>
+        <button
+          class="mode-btn"
+          type="button"
           :class="{ active: props.mode === 'remote' }"
           @click="setMode('remote')"
         >

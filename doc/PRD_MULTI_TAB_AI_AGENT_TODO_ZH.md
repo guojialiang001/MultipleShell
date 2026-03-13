@@ -7,8 +7,9 @@
 ## 0. 设计确认（先锁定）
 
 - [ ] 明确 **主体AGENT（Main Agent）= Planner TAB**：Planner 直接复用现有配置模板启动（`claude-code` / `codex` / `opencode`），并约定 Tool-Call 输出格式。
+- [ ] 明确「主任务主管（语音输入条/语音录入条下方）」的交互形态：可编排 TAB、可唤起三大类 CLI 分工协作，并在延长区提供 **文字输入 + 状态文字 + 内容展示**（与现有 AgentDock 的演进/复用关系也需定稿）。
 - [ ] Tool-Call 载荷格式定稿：`__MPS_TOOL__ <json>` 与 `__MPS_TOOL_RESULT__ <json>`；是否需要 base64-json；是否需要 `nonce/signature` 防误触发。
-- [ ] 最小工具集（MVP）定稿：`tabs.list / tabs.create / tabs.send / monitor.getStates / run.reportDraft`（可按实际收敛）。
+- [ ] 最小工具集（MVP）定稿：`tools.list / configs.list / tabs.list / tabs.create / tabs.send / monitor.getStates`（可选：`tabs.kill / monitor.getState / run.reportDraft`）。
 - [ ] 风险确认策略定稿：哪些命令属于 `high/medium/low`；`high` 必须确认；确认弹窗展示信息与可配置项。
 - [ ] 运行态数据落盘范围定稿：只存元数据（Goal/Plan/结论/命令清单）还是也存部分摘要；与现有“last N 行预览”隐私策略对齐。
 
@@ -39,6 +40,13 @@
 - [ ] “接管/聚焦”某个 Worker：点击看板条目切换到对应 TAB。
 - [ ] 风险确认弹窗：命中 `high` 规则时阻断并要求确认；展示目标 TAB、命令片段、风险原因。
 - [x] 主体AGENT输出面板（语音输入条下方）：显示 Tool-Call/Tool-Result/风控日志，提供输入框发送指令，并支持“绑定当前TAB”为主体AGENT。
+- [ ] 主任务主管（语音输入条下方）增强：在现有输出面板基础上，补齐“TAB 编排 + 三类 CLI 分工 + 状态/内容展示”：
+  - [ ] TAB 编排条：以 chips/列表展示 Planner + Workers（角色、CLI 类型、状态），支持一键聚焦/关闭/复制 sessionId。
+  - [ ] 三大类 CLI 快捷唤起：基于 `configs.list` 识别 `claude-code / codex / opencode`，并提供一键创建角色 TAB（Executor/Tester/Doc/Reviewer）。
+  - [ ] 文字输入：延长区内提供对 Planner 的文本输入（复用现有输入框即可），并支持“发送给指定 Worker / 广播”。
+  - [ ] 状态文字：展示当前阶段（planning/executing/waiting/done）、当前阻塞点、最近一次 tool_call/tool_result/risk 事件（对齐 prompts 的 `【状态】...` 约定）。
+  - [ ] 内容展示：展示结构化 Plan/Workers/Next/Deliverables（可直接渲染 Planner Markdown，或做摘要卡片）；工具日志与内容展示需视觉分区。
+  - [ ] 语音转写联动：语音录入完成后默认填充到延长区文字输入，允许编辑后发送给 Planner。
 
 ## 4. 工具提示词与约定（让 Planner 真能用）
 
@@ -46,6 +54,7 @@
   - Tool-Call 的输出格式与字段含义
   - 何时输出 Tool-Call、何时等待 Tool-Result
   - 如何把 Tool-Result 纳入推理并继续拆解任务
+  - 主任务主管 UI 展示约定：状态行（`【状态】...`）与内容区 Markdown 结构、Worker 汇报格式建议
 - [ ] 提供至少 1 套 Team Preset 默认示例（Planner/Executor/Tester/Doc）。
 
 ## 5. 自检/验收

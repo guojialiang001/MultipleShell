@@ -9,6 +9,7 @@ export default {
     language: 'Language',
     modeShell: 'Shell',
     modeMonitor: 'View',
+    modeAgent: 'Agent',
     modeRemote: 'Remote'
   },
   agent: {
