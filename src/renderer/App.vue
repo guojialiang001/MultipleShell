@@ -684,29 +684,32 @@ const toggleVoiceCapture = () => {
       @close="closeTab"
       @new="newTab"
     />
-
+ 
     <div class="content">
-      <teleport to="body">
-        <Transition name="fade">
-          <div v-if="showConfigSelector" class="modal-overlay">
-            <div class="modal-container">
-              <ConfigSelector
-                :mode="configSelectorMode"
-                :configTemplates="configTemplates"
-                :currentTabConfig="activeTabId ? tabs.find(t => t.id === activeTabId)?.config : null"
-                @create="createTab"
-                @update="updateTabConfig"
-                @saveTemplate="saveConfigTemplate"
-                @deleteTemplate="deleteConfigTemplate"
-                @importFromCCSwitch="importFromCCSwitch"
-                @close="closeConfigSelector"
-                @switchMode="switchConfigMode"
-              />
-            </div>
+      <Transition name="fade">
+        <div
+          v-if="showConfigSelector"
+          class="modal-overlay"
+          :class="{ 'modal-overlay--page': configSelectorMode === 'manage' }"
+        >
+          <div class="modal-container" :class="{ 'modal-container--page': configSelectorMode === 'manage' }">
+            <ConfigSelector
+              :variant="configSelectorMode === 'manage' ? 'page' : 'modal'"
+              :mode="configSelectorMode"
+              :configTemplates="configTemplates"
+              :currentTabConfig="activeTabId ? tabs.find(t => t.id === activeTabId)?.config : null"
+              @create="createTab"
+              @update="updateTabConfig"
+              @saveTemplate="saveConfigTemplate"
+              @deleteTemplate="deleteConfigTemplate"
+              @importFromCCSwitch="importFromCCSwitch"
+              @close="closeConfigSelector"
+              @switchMode="switchConfigMode"
+            />
           </div>
-        </Transition>
-      </teleport>
-
+        </div>
+      </Transition>
+ 
       <div
         class="shell-view"
         :class="{ 'shell-view--inactive': uiMode !== 'shell' }"
@@ -963,17 +966,25 @@ html {
 
 /* Modal Overlay */
 .modal-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   background-color: rgba(0, 0, 0, 0.75);
   backdrop-filter: blur(8px);
-  z-index: 2500;
+  z-index: 1900;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+
+.modal-overlay--page {
+  background-color: var(--bg-color);
+  backdrop-filter: none;
+  padding: 18px;
+  align-items: stretch;
+  justify-content: stretch;
 }
 
 .modal-container {
@@ -984,6 +995,15 @@ html {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
   overflow: hidden;
+}
+
+.modal-container--page {
+  min-width: 0;
+  max-width: none;
+  width: 100%;
+  animation: none;
+  flex: 1;
+  min-height: 0;
 }
 
 @keyframes modal-slide-up {

@@ -11,7 +11,8 @@ import {
 const props = defineProps({
   mode: { type: String, default: 'create' }, // create | manage | edit
   configTemplates: { type: Array, required: true },
-  currentTabConfig: { type: Object, default: null }
+  currentTabConfig: { type: Object, default: null },
+  variant: { type: String, default: 'modal' } // modal | page
 })
 
 const emit = defineEmits(['create', 'update', 'saveTemplate', 'deleteTemplate', 'close', 'switchMode', 'importFromCCSwitch'])
@@ -533,7 +534,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="!showEditor" class="config-selector">
+  <div
+    v-if="!showEditor"
+    class="config-selector"
+    :class="{ 'config-selector--page': variant === 'page' }"
+  >
     <div class="header">
       <h3>{{ headerTitle }}</h3>
       <div class="header-actions">
@@ -740,7 +745,7 @@ onBeforeUnmount(() => {
     </Transition>
   </div>
 
-  <ConfigEditor v-else :config="editingConfig" @save="saveConfig" @cancel="showEditor = false" />
+  <ConfigEditor v-else :config="editingConfig" :variant="variant" @save="saveConfig" @cancel="showEditor = false" />
 </template>
 
 <style scoped>
@@ -754,6 +759,17 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   max-height: 80vh;
+}
+
+.config-selector--page {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
 }
 
 .header {

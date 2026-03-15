@@ -3,7 +3,8 @@ import { ref, watch, computed, onBeforeUnmount, onMounted, onUnmounted } from 'v
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps({
-  config: { type: Object, default: null }
+  config: { type: Object, default: null },
+  variant: { type: String, default: 'modal' } // modal | page
 })
 
 const emit = defineEmits(['save', 'cancel'])
@@ -578,7 +579,14 @@ const save = () => {
 </script>
 
 <template>
-  <div class="config-editor" :class="{ 'is-codex': isCodex, 'is-codex-expanded': codexSplit }">
+  <div
+    class="config-editor"
+    :class="{
+      'is-codex': isCodex,
+      'is-codex-expanded': codexSplit,
+      'config-editor--page': variant === 'page'
+    }"
+  >
     <div class="header">
         <h3>{{ config ? t('configEditor.titleEdit') : t('configEditor.titleNew') }}</h3>
     </div>
@@ -852,9 +860,26 @@ const save = () => {
   overflow: hidden;
 }
 
+.config-editor--page {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  min-width: 0;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+
 .config-editor.is-codex-expanded {
   min-width: 980px;
   width: min(1100px, 90vw);
+}
+
+.config-editor--page.is-codex-expanded {
+  min-width: 0;
+  width: 100%;
 }
 
 .header {

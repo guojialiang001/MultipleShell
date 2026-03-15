@@ -221,7 +221,7 @@ const transcribeAudio = async ({ audioData, format = 'webm' }) => {
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
-    height: 920,
+    height: 800,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
